@@ -10,11 +10,19 @@
 import os
 import sys
 import json
-import tkinter as tk
-from tkinter import ttk, messagebox, colorchooser, simpledialog
+from copy import deepcopy
+try:
+    import tkinter as tk
+    from tkinter import ttk, messagebox, colorchooser, simpledialog
+    from PIL import Image, ImageTk
+    _TK_IMPORT_ERROR = None
+except ImportError as exc:  # Allows non-GUI analysis modules to be tested headlessly.
+    tk = ttk = messagebox = colorchooser = simpledialog = ImageTk = None
+    from PIL import Image
+    _TK_IMPORT_ERROR = exc
+
 import cv2
 import numpy as np
-from PIL import Image, ImageTk
 
 from ..config import (
     PERFORMANCE_PROFILES,
@@ -26,6 +34,7 @@ from ..config import (
     DEFAULT_DETECTOR_PRESETS, DEFAULT_AUTO_MARK_COOLDOWN_SEC, DEFAULT_PLAYER_HUD_METRICS
 )
 from ..utils.helpers import is_miicam_source
+from ..utils.formulas import FormulaValidationError, is_safe_variable_name, validate_formula
 
 APP_SETTINGS_FILE = "config.json"
 
@@ -121,8 +130,8 @@ DEFAULT_CONFIG = {
     "miicam_anti_flicker": 1,
     "detector_compare_mode": "split",
     "detector_split_pos": 50,
-    "detector_presets": DEFAULT_DETECTOR_PRESETS,
-    "player_hud_metrics": DEFAULT_PLAYER_HUD_METRICS,
+    "detector_presets": deepcopy(DEFAULT_DETECTOR_PRESETS),
+    "player_hud_metrics": list(DEFAULT_PLAYER_HUD_METRICS),
 
     # Видео и ROI
     "record_video": True,
@@ -137,6 +146,13 @@ DEFAULT_CONFIG = {
 }
 
 NOTIFICATION_DEFAULTS = DEFAULT_CONFIG
+
+
+def _require_tkinter():
+    if tk is None:
+        raise RuntimeError(
+            "Tkinter недоступен. Установите компонент Python Tk/Tcl для запуска интерфейса."
+        ) from _TK_IMPORT_ERROR
 
 
 def settings_path():
@@ -165,8 +181,19 @@ def save_settings(data):
 
 class SettingsWindow:
     def __init__(self, parent, config, on_apply=None, current_cap=None):
+        _require_tkinter()
         self.parent = parent
-        self.config = config
+        self.config = config if isinstance(config, dict) else {}
+        # Never let a dialog mutate module-level defaults through a caller's
+        # shallow copy of DEFAULT_CONFIG.
+        presets = self.config.get("detector_presets")
+        self.config["detector_presets"] = deepcopy(
+            presets if isinstance(presets, dict) else DEFAULT_DETECTOR_PRESETS
+        )
+        hud_metrics = self.config.get("player_hud_metrics")
+        self.config["player_hud_metrics"] = list(
+            hud_metrics if isinstance(hud_metrics, list) else DEFAULT_PLAYER_HUD_METRICS
+        )
         self.on_apply = on_apply
         self.current_cap = current_cap
 
@@ -711,7 +738,7 @@ class SettingsWindow:
         ttk.Label(p_row, text="Пресет сенсора:", font=("Segoe UI", 9, "bold")).pack(side="left", padx=(0, 6))
 
         if "detector_presets" not in self.config or not isinstance(self.config.get("detector_presets"), dict):
-            self.config["detector_presets"] = dict(DEFAULT_DETECTOR_PRESETS)
+            self.config["detector_presets"] = deepcopy(DEFAULT_DETECTOR_PRESETS)
 
         preset_names = list(self.config["detector_presets"].keys())
         self.preset_var = tk.StringVar(value=preset_names[0] if preset_names else "По умолчанию (Default)")
@@ -1179,7 +1206,7 @@ class SettingsWindow:
             except Exception:
                 pass
         if "detector_presets" not in self.config or not isinstance(self.config["detector_presets"], dict):
-            self.config["detector_presets"] = dict(DEFAULT_DETECTOR_PRESETS)
+            self.config["detector_presets"] = deepcopy(DEFAULT_DETECTOR_PRESETS)
         self.config["detector_presets"][name] = p_data
         preset_names = list(self.config["detector_presets"].keys())
         if hasattr(self, 'cb_detector_presets'):
@@ -1197,7 +1224,7 @@ class SettingsWindow:
             del self.config["detector_presets"][name]
             preset_names = list(self.config["detector_presets"].keys())
             if not preset_names:
-                self.config["detector_presets"] = dict(DEFAULT_DETECTOR_PRESETS)
+                self.config["detector_presets"] = deepcopy(DEFAULT_DETECTOR_PRESETS)
                 preset_names = list(self.config["detector_presets"].keys())
             if hasattr(self, 'cb_detector_presets'):
                 self.cb_detector_presets.config(values=preset_names)
@@ -2023,8 +2050,18 @@ class SettingsWindow:
         if not name or not formula:
             messagebox.showwarning("Переменные", "Укажите имя переменной и формулу.", parent=self.win)
             return
-        if not name.isidentifier():
-            messagebox.showerror("Ошибка", f"Имя переменной «{name}» некорректно. Используйте буквы латиницы и цифры (например: TOTAL_RGB, NORM_B).", parent=self.win)
+        if not is_safe_variable_name(name):
+            messagebox.showerror(
+                "Ошибка",
+                f"Имя переменной «{name}» некорректно или зарезервировано. "
+                "Используйте латинские буквы, цифры и знак подчёркивания (например: TOTAL_RGB, NORM_B).",
+                parent=self.win,
+            )
+            return
+        try:
+            validate_formula(formula)
+        except FormulaValidationError as exc:
+            messagebox.showerror("Ошибка формулы", str(exc), parent=self.win)
             return
         self._custom_variables.append({"name": name, "formula": formula})
         self._refresh_custom_var_list()
@@ -2051,6 +2088,11 @@ class SettingsWindow:
         color = self.custom_color_var.get().strip() or "#00FFCC"
         if not name or not formula:
             messagebox.showwarning("Графики", "Укажите название и формулу графика.", parent=self.win)
+            return
+        try:
+            validate_formula(formula)
+        except FormulaValidationError as exc:
+            messagebox.showerror("Ошибка формулы", str(exc), parent=self.win)
             return
         self._custom_graphs.append({"name": name, "formula": formula, "color": color})
         self._refresh_custom_graph_list()
@@ -2127,7 +2169,7 @@ class SettingsWindow:
   • mean(x)                 — среднее значение
   • diff(x)                 — первая производная (градиент)
   • sin(x), cos(x)          — тригонометрические функции
-  • np.*                    — любые функции NumPy (np.gradient, np.std, np.clip)
+  • np.gradient, np.std, np.clip и другие разрешённые численные функции NumPy
 
 
 4. ПРАКТИЧЕСКИЕ ПРИМЕРЫ ГОТОВЫХ ФОРМУЛ

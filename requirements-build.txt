@@ -1,0 +1,3 @@
+# Dependencies required only to build a Windows distributable.
+-r requirements.txt
+pyinstaller>=6,<7

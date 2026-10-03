@@ -6,3 +6,6 @@ __pycache__/
 dist/
 build/
 *.egg
+.venv/
+installer_output/
+*.spec

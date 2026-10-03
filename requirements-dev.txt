@@ -1,0 +1,2 @@
+# Local development and regression-test environment.
+-r requirements-build.txt

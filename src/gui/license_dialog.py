@@ -3,8 +3,13 @@
 """
 
 import sys
-import tkinter as tk
-from tkinter import ttk, messagebox
+try:
+    import tkinter as tk
+    from tkinter import ttk, messagebox
+    _TK_IMPORT_ERROR = None
+except ImportError as exc:
+    tk = ttk = messagebox = None
+    _TK_IMPORT_ERROR = exc
 from ..utils.license_manager import (
     LicenseManager, get_hardware_id,
     LICENSE_STATUS_LICENSED, LICENSE_STATUS_TRIAL_ACTIVE, LICENSE_STATUS_TRIAL_EXPIRED
@@ -15,6 +20,8 @@ class LicenseDialog:
     """Диалог активации и информации о лицензии."""
     
     def __init__(self, parent=None, config=None, lic_mgr=None, on_activated=None, block_if_expired=False):
+        if tk is None:
+            raise RuntimeError("Tkinter недоступен. Диалог лицензии невозможно открыть.") from _TK_IMPORT_ERROR
         self.parent = parent
         self.config = config or {}
         self.on_activated = on_activated

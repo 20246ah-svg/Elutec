@@ -496,7 +496,10 @@ class Tests(unittest.TestCase):
         w.stop()
 
     def test_settings_window_detector_tab_visibility(self):
-        import tkinter as tk
+        try:
+            import tkinter as tk
+        except ImportError:
+            self.skipTest("Tkinter is not installed in this test environment")
         from src.gui.settings_window import SettingsWindow
         from src.utils.helpers import is_miicam_source
 
@@ -657,7 +660,10 @@ class Tests(unittest.TestCase):
         self.assertEqual(len(o.annotation_manager.annotations), 2)
 
     def test_detector_named_presets_save_apply_delete(self):
-        import tkinter as tk
+        try:
+            import tkinter as tk
+        except ImportError:
+            self.skipTest("Tkinter is not installed in this test environment")
         from src.gui.settings_window import SettingsWindow, DEFAULT_CONFIG
         try:
             root = tk.Tk()

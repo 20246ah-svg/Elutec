@@ -5,6 +5,7 @@ from collections import deque
 import numpy as np
 
 from ..analysis.annotations import Annotation, AnnotationManager
+from ..utils.formulas import evaluate_formula, is_safe_variable_name
 from ..utils.math_utils import (
     adaptive_log_y_range, nice_y_axis_ticks, compute_window_rate,
     compute_window_mean, compute_window_median_before,
@@ -1262,24 +1263,22 @@ class LiveGraphWindow:
             'log_ratio_speed30': np.asarray(getattr(self, '_cached_log_ratio_speed30', []), dtype=np.float64),
             'rgb_sum_acceleration30': np.asarray(getattr(self, '_cached_rgb_sum_acceleration30', []), dtype=np.float64),
         }
-        safe_builtins = {'abs': abs, 'min': min, 'max': max, 'round': round, 'float': float, 'int': int}
-
         # Evaluate custom variables first (Option 2)
         cfg = getattr(self, 'notification_settings', {}) or {}
         custom_vars = cfg.get('custom_variables', []) if isinstance(cfg, dict) else []
         for cv in custom_vars:
             v_name = str(cv.get('name', '')).strip()
             v_formula = str(cv.get('formula', '')).strip()
-            if v_name and v_formula and v_name.isidentifier():
+            if v_name and v_formula and is_safe_variable_name(v_name, set(env)):
                 try:
-                    v_val = eval(v_formula, {'__builtins__': safe_builtins}, env)
+                    v_val = evaluate_formula(v_formula, env)
                     env[v_name] = np.asarray(v_val, dtype=np.float64)
-                except Exception:
+                except (ValueError, TypeError):
                     pass
 
         for item in self.custom_graphs:
             try:
-                value = eval(item['formula'], {'__builtins__': safe_builtins}, env)
+                value = evaluate_formula(item['formula'], env)
                 arr = np.asarray(value, dtype=np.float64)
                 if arr.ndim == 0:
                     arr = np.full(len(x_display), float(arr), dtype=np.float64)
@@ -1292,7 +1291,6 @@ class LiveGraphWindow:
                     continue
                 item['curve'].setData(x_display, arr, downsample=max(1, len(arr)//4000))
             except Exception:
-                item['curve'].setData([], [])
                 item['curve'].setData([], [])
 
     def _apply_theme(self):
@@ -1962,21 +1960,19 @@ class LiveGraphWindow:
             'log_br': log_br_val,
             'log_bg': log_bg_val,
         }
-        safe_builtins = {'abs': abs, 'min': min, 'max': max, 'round': round, 'float': float, 'int': int}
-
         # 1. Evaluate custom variables
         cfg = getattr(self, 'notification_settings', {}) or {}
         custom_vars = cfg.get('custom_variables', []) if isinstance(cfg, dict) else []
         for cv in custom_vars:
             v_name = str(cv.get('name', '')).strip()
             v_formula = str(cv.get('formula', '')).strip()
-            if v_name and v_formula and v_name.isidentifier():
+            if v_name and v_formula and is_safe_variable_name(v_name, set(env)):
                 try:
-                    v_val = eval(v_formula, {'__builtins__': safe_builtins}, env)
+                    v_val = evaluate_formula(v_formula, env)
                     f_val = float(v_val)
                     env[v_name] = f_val
                     values[v_name] = f_val
-                except Exception:
+                except (ValueError, TypeError):
                     pass
 
         # 2. Evaluate custom graphs
@@ -1986,7 +1982,7 @@ class LiveGraphWindow:
             cg_formula = str(cg.get('formula', '')).strip()
             if cg_name and cg_formula:
                 try:
-                    cg_val = eval(cg_formula, {'__builtins__': safe_builtins}, env)
+                    cg_val = evaluate_formula(cg_formula, env)
                     f_val = float(cg_val)
                     values[cg_name] = f_val
                     if cg_name.isidentifier():

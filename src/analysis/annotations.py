@@ -1,13 +1,14 @@
 from datetime import datetime
+import math
 
 class Annotation:
     """Класс для хранения данных о метке на графике."""
     def __init__(self, time_ms, description="", color=None, is_auto=False,
                  r=None, g=None, b=None,
                  rgb_sum_slope_30s=None, transition_score=None):
-        self.time_ms = time_ms
-        self.description = description
-        self.color = color or "#FF4444"
+        self.time_ms = self._to_time_ms(time_ms)
+        self.description = str(description or "")
+        self.color = str(color or "#FF4444")
         self.created_at = datetime.now()
         self.is_auto = bool(is_auto)
         self.r = self._to_optional_float(r)
@@ -15,6 +16,15 @@ class Annotation:
         self.b = self._to_optional_float(b)
         self.rgb_sum_slope_30s = self._to_optional_float(rgb_sum_slope_30s)
         self.transition_score = self._to_optional_float(transition_score)
+
+    @staticmethod
+    def _to_time_ms(value):
+        """Normalize persisted marker time so sorting can never compare mixed types."""
+        try:
+            time_ms = float(value)
+            return time_ms if math.isfinite(time_ms) and time_ms >= 0 else 0.0
+        except (TypeError, ValueError):
+            return 0.0
 
     @staticmethod
     def _to_optional_float(value):
@@ -41,6 +51,8 @@ class Annotation:
     
     @classmethod
     def from_dict(cls, data):
+        if not isinstance(data, dict):
+            data = {}
         ann = cls(
             data.get('time_ms'),
             data.get('description', ''),
@@ -118,7 +130,7 @@ class AnnotationManager:
     @classmethod
     def from_dict_list(cls, data_list):
         manager = cls()
-        for data in data_list:
+        for data in data_list or []:
             ann = Annotation.from_dict(data)
             manager.annotations.append(ann)
         manager.annotations.sort(key=lambda a: a.time_ms)

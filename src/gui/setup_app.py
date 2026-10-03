@@ -1,6 +1,11 @@
 import json
-import tkinter as tk
-from tkinter import ttk, messagebox, filedialog
+try:
+    import tkinter as tk
+    from tkinter import ttk, messagebox, filedialog
+    _TK_IMPORT_ERROR = None
+except ImportError as exc:
+    tk = ttk = messagebox = filedialog = None
+    _TK_IMPORT_ERROR = exc
 from .settings_window import SettingsWindow, load_saved_settings
 import cv2
 import numpy as np
@@ -8,7 +13,11 @@ import time
 import os
 import socket
 import threading
-from PIL import Image, ImageTk, ImageDraw, ImageFont
+from PIL import Image, ImageDraw, ImageFont
+try:
+    from PIL import ImageTk
+except ImportError:
+    ImageTk = None
 from collections import deque
 from ..utils.math_utils import compute_log_br
 
@@ -119,6 +128,10 @@ class PreviewWorker:
 
 class SetupApp:
     def __init__(self):
+        if tk is None or ImageTk is None:
+            raise RuntimeError(
+                "Tkinter недоступен. Установите компонент Python Tk/Tcl для запуска интерфейса."
+            ) from _TK_IMPORT_ERROR
         self.root = tk.Tk()
         self.root.title("Элютек")
         self.root.geometry("1600x860")

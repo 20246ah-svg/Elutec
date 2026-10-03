@@ -146,11 +146,11 @@ def compute_window_rate(time_ms_values, signal_values, window_ms=RATE_WINDOW_MS,
         start_t = end_t - float(window_ms)
         mask = (t_all >= start_t) & np.isfinite(t_all) & np.isfinite(y_all)
         count = int(np.count_nonzero(mask))
-
-        if count < 2:
-            mask = np.isfinite(t_all) & np.isfinite(y_all)
-            count = int(np.count_nonzero(mask))
-        if count < 2:
+        required_points = max(2, int(min_points))
+        # A slope based on a couple of samples is noise rather than a reliable
+        # derivative.  Respect the configured minimum instead of silently
+        # falling back to points outside the requested time window.
+        if count < required_points:
             return 0.0
 
         t = (t_all[mask] - end_t) / 1000.0
@@ -181,9 +181,7 @@ def compute_window_mean(time_ms_values, signal_values, window_ms=RGB_SUM_SMOOTH_
         end_t = float(t_all[-1])
         start_t = end_t - float(window_ms)
         mask = (t_all >= start_t) & np.isfinite(t_all) & np.isfinite(y_all)
-        if int(np.count_nonzero(mask)) < 1:
-            mask = np.isfinite(t_all) & np.isfinite(y_all)
-        if int(np.count_nonzero(mask)) < 1:
+        if int(np.count_nonzero(mask)) < max(1, int(min_points)):
             return float('nan')
         return float(np.mean(y_all[mask]))
     except Exception:
@@ -205,14 +203,12 @@ def compute_window_median_before(time_ms_values, signal_values, lookback_ms=CHRO
         t1 = current_t - float(gap_ms) - float(lookback_ms)
         t2 = current_t - float(gap_ms)
         mask = (t_all >= t1) & (t_all <= t2) & np.isfinite(t_all) & np.isfinite(y_all)
-        if int(np.count_nonzero(mask)) >= 1:
-            return float(np.median(y_all[mask]))
-
-                                                               
-        valid = np.isfinite(t_all) & np.isfinite(y_all)
-        if int(np.count_nonzero(valid)) >= 1:
-            return float(y_all[valid][-1])
-        return float('nan')
+        # The baseline represents a previous stable state.  Returning the last
+        # point when there is not enough historical data made the detector look
+        # confident during start-up and after a seek.
+        if int(np.count_nonzero(mask)) < max(1, int(min_points)):
+            return float('nan')
+        return float(np.median(y_all[mask]))
     except Exception:
         return float('nan')
 
