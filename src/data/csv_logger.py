@@ -1,116 +1,156 @@
+"""Durable emergency CSV logging for an active analysis session."""
+
+from __future__ import annotations
+
 import csv
 import os
+import threading
 import time
+from typing import Any, Iterable, Optional
+
 import numpy as np
-from typing import List, Any, Optional
 
 from ..config import CSV_FLUSH_INTERVAL_SEC, CSV_FLUSH_ROWS
 
-import csv
-import os
-import time
-from typing import List, Any, Optional
+
+CSV_HEADERS = (
+    "time_ms", "time_s", "time_min", "R", "G", "B",
+    "Log10(B/R)", "Log10(B/G)", "RGB_sum", "R_frac", "G_frac", "B_frac",
+    "RGB_triangle_X", "RGB_triangle_Y", "RGB_sum_smooth_10s",
+    "RGB_sum_slope_10s", "RGB_sum_slope_30s", "RGB_vector_speed_30s",
+    "Chromaticity_speed_30s", "K_chrom_from_previous_state",
+    "Log_ratio_speed_30s", "RGB_sum_acceleration_30s", "Transition_score",
+)
 
 
 class CsvLogger:
-    """
-    Пишет строки данных в CSV-файл с периодическим flush.
-    Предполагается, что каждая строка содержит: time_ms, R, G, B, log_br, log_bg,
-    rgb_sum, r_frac, g_frac, b_frac, tri_x, tri_y, rgb_sum_smooth, rgb_sum_slope10,
-    rgb_sum_slope30, rgb_vector_speed30, chromaticity_speed30, k_chrom_previous,
-    log_ratio_speed30, rgb_sum_acceleration30, transition_score.
+    """Write analysis samples to an emergency CSV with bounded flush intervals.
+
+    The logger deliberately keeps working if one malformed sample arrives.  A
+    write/flush I/O error is retained in :attr:`error` and disables subsequent
+    writes so the analysis thread itself never crashes.
     """
 
     def __init__(self, filepath: Optional[str] = None):
         self.filepath = filepath
         self._file = None
         self._writer = None
+        self._lock = threading.RLock()
         self._last_flush = 0.0
         self._rows_since_flush = 0
-        self._error = ''
+        self._error = ""
         if filepath:
             self._open()
 
-    def _open(self):
+    @property
+    def error(self) -> str:
+        return self._error
+
+    @property
+    def is_open(self) -> bool:
+        return self._writer is not None and self._file is not None
+
+    def _open(self) -> bool:
         if not self.filepath:
-            return
-        try:
-            os.makedirs(os.path.dirname(self.filepath), exist_ok=True)
-            self._file = open(self.filepath, 'w', newline='', encoding='utf-8-sig')
-            self._writer = csv.writer(self._file, delimiter=';')
-            self._writer.writerow([
-                'time_ms', 'time_s', 'time_min', 'R', 'G', 'B',
-                'Log10(B/R)', 'Log10(B/G)', 'RGB_sum', 'R_frac', 'G_frac', 'B_frac',
-                'RGB_triangle_X', 'RGB_triangle_Y', 'RGB_sum_smooth_10s',
-                'RGB_sum_slope_10s', 'RGB_sum_slope_30s', 'RGB_vector_speed_30s',
-                'Chromaticity_speed_30s', 'K_chrom_from_previous_state',
-                'Log_ratio_speed_30s', 'RGB_sum_acceleration_30s', 'Transition_score'
-            ])
-            self._flush(force=True)
-            print(f"🛟 Аварийный CSV RGB: {self.filepath}")
-        except Exception as e:
-            self._error = f'Не удалось открыть аварийный CSV: {e}'
-            self._file = None
-            self._writer = None
-            print(f"⚠️ {self._error}")
-
-    def write_row(self, row: List[Any]):
-        if self._writer is None:
-            return
-        try:
-            t_ms = float(row[0])
-            self._writer.writerow([
-                int(t_ms),
-                round(t_ms / 1000.0, 3),
-                round(t_ms / 60000.0, 5),
-                *[self._finite_or_blank(v) for v in row[1:]]
-            ])
-            self._rows_since_flush += 1
-            now = time.time()
-            if (now - self._last_flush) >= CSV_FLUSH_INTERVAL_SEC or self._rows_since_flush >= CSV_FLUSH_ROWS:
+            return False
+        with self._lock:
+            try:
+                # ``dirname('session.csv')`` is empty.  Resolving it first also
+                # makes a relative emergency-log path valid.
+                parent = os.path.dirname(os.path.abspath(self.filepath))
+                os.makedirs(parent, exist_ok=True)
+                self._file = open(self.filepath, "w", newline="", encoding="utf-8-sig")
+                self._writer = csv.writer(self._file, delimiter=";")
+                self._writer.writerow(CSV_HEADERS)
                 self._flush(force=True)
-        except Exception as e:
-            self._error = f'Ошибка записи аварийного CSV: {e}'
-            print(f"⚠️ {self._error}")
-            self._flush(force=True)
-            self._writer = None
+                print(f"🛟 Аварийный CSV RGB: {self.filepath}")
+                return True
+            except OSError as exc:
+                self._error = f"Не удалось открыть аварийный CSV: {exc}"
+                self._file = None
+                self._writer = None
+                print(f"⚠️ {self._error}")
+                return False
 
-    def _flush(self, force=False):
+    def write_row(self, row: Iterable[Any]) -> bool:
+        """Write one raw analysis row; return ``True`` only when it was stored."""
+        with self._lock:
+            if self._writer is None:
+                return False
+            try:
+                values = list(row)
+                if not values:
+                    raise ValueError("пустая строка")
+                time_ms = float(values[0])
+                if not np.isfinite(time_ms):
+                    raise ValueError("time_ms не является конечным числом")
+            except (TypeError, ValueError) as exc:
+                self._error = f"Строка аварийного CSV пропущена: {exc}"
+                return False
+
+            try:
+                self._writer.writerow((
+                    int(time_ms),
+                    round(time_ms / 1000.0, 3),
+                    round(time_ms / 60000.0, 5),
+                    *(self._finite_or_blank(value) for value in values[1:]),
+                ))
+                self._rows_since_flush += 1
+                now = time.monotonic()
+                if (
+                    now - self._last_flush >= CSV_FLUSH_INTERVAL_SEC
+                    or self._rows_since_flush >= CSV_FLUSH_ROWS
+                ):
+                    self._flush(force=True)
+                return True
+            except (OSError, csv.Error) as exc:
+                self._error = f"Ошибка записи аварийного CSV: {exc}"
+                print(f"⚠️ {self._error}")
+                self._disable_writer()
+                return False
+
+    def _flush(self, force: bool = False) -> bool:
         if self._file is None:
-            return
+            return False
         try:
             self._file.flush()
             if force:
                 os.fsync(self._file.fileno())
-            self._last_flush = time.time()
+            self._last_flush = time.monotonic()
             self._rows_since_flush = 0
-        except Exception as e:
-            self._error = f'Ошибка flush аварийного CSV: {e}'
+            return True
+        except OSError as exc:
+            self._error = f"Ошибка flush аварийного CSV: {exc}"
             print(f"⚠️ {self._error}")
+            return False
 
-    def close(self):
-        if self._file is None:
-            return
-        try:
+    def _disable_writer(self) -> None:
+        file_obj, self._file = self._file, None
+        self._writer = None
+        if file_obj is not None:
+            try:
+                file_obj.close()
+            except OSError:
+                pass
+
+    def close(self) -> None:
+        with self._lock:
+            if self._file is None:
+                return
             self._flush(force=True)
-        except Exception:
-            pass
-        try:
-            self._file.close()
-            print(f"🛟 Аварийный CSV закрыт: {self.filepath}")
-        except Exception as e:
-            print(f"⚠️ Ошибка закрытия аварийного CSV: {e}")
-        finally:
-            self._file = None
+            file_obj, self._file = self._file, None
             self._writer = None
+            try:
+                file_obj.close()
+                print(f"🛟 Аварийный CSV закрыт: {self.filepath}")
+            except OSError as exc:
+                self._error = f"Ошибка закрытия аварийного CSV: {exc}"
+                print(f"⚠️ {self._error}")
 
     @staticmethod
-    def _finite_or_blank(value, ndigits=9):
+    def _finite_or_blank(value: Any, ndigits: int = 9):
         try:
-            v = float(value)
-            if not np.isfinite(v):
-                return ''
-            return round(v, ndigits)
-        except Exception:
-            return ''
-
+            number = float(value)
+            return round(number, ndigits) if np.isfinite(number) else ""
+        except (TypeError, ValueError):
+            return ""

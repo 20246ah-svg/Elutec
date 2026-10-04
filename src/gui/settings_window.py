@@ -10,11 +10,19 @@
 import os
 import sys
 import json
-import tkinter as tk
-from tkinter import ttk, messagebox, colorchooser, simpledialog
+from copy import deepcopy
+try:
+    import tkinter as tk
+    from tkinter import ttk, messagebox, colorchooser, simpledialog
+    from PIL import Image, ImageTk
+    _TK_IMPORT_ERROR = None
+except ImportError as exc:  # Allows non-GUI analysis modules to be tested headlessly.
+    tk = ttk = messagebox = colorchooser = simpledialog = ImageTk = None
+    from PIL import Image
+    _TK_IMPORT_ERROR = exc
+
 import cv2
 import numpy as np
-from PIL import Image, ImageTk
 
 from ..config import (
     PERFORMANCE_PROFILES,
@@ -26,6 +34,8 @@ from ..config import (
     DEFAULT_DETECTOR_PRESETS, DEFAULT_AUTO_MARK_COOLDOWN_SEC, DEFAULT_PLAYER_HUD_METRICS
 )
 from ..utils.helpers import is_miicam_source
+from ..utils.formulas import FormulaValidationError, is_safe_variable_name, validate_formula
+from .design_system import apply_ttk_theme
 
 APP_SETTINGS_FILE = "config.json"
 
@@ -121,8 +131,8 @@ DEFAULT_CONFIG = {
     "miicam_anti_flicker": 1,
     "detector_compare_mode": "split",
     "detector_split_pos": 50,
-    "detector_presets": DEFAULT_DETECTOR_PRESETS,
-    "player_hud_metrics": DEFAULT_PLAYER_HUD_METRICS,
+    "detector_presets": deepcopy(DEFAULT_DETECTOR_PRESETS),
+    "player_hud_metrics": list(DEFAULT_PLAYER_HUD_METRICS),
 
     # Видео и ROI
     "record_video": True,
@@ -137,6 +147,13 @@ DEFAULT_CONFIG = {
 }
 
 NOTIFICATION_DEFAULTS = DEFAULT_CONFIG
+
+
+def _require_tkinter():
+    if tk is None:
+        raise RuntimeError(
+            "Tkinter недоступен. Установите компонент Python Tk/Tcl для запуска интерфейса."
+        ) from _TK_IMPORT_ERROR
 
 
 def settings_path():
@@ -165,8 +182,19 @@ def save_settings(data):
 
 class SettingsWindow:
     def __init__(self, parent, config, on_apply=None, current_cap=None):
+        _require_tkinter()
         self.parent = parent
-        self.config = config
+        self.config = config if isinstance(config, dict) else {}
+        # Never let a dialog mutate module-level defaults through a caller's
+        # shallow copy of DEFAULT_CONFIG.
+        presets = self.config.get("detector_presets")
+        self.config["detector_presets"] = deepcopy(
+            presets if isinstance(presets, dict) else DEFAULT_DETECTOR_PRESETS
+        )
+        hud_metrics = self.config.get("player_hud_metrics")
+        self.config["player_hud_metrics"] = list(
+            hud_metrics if isinstance(hud_metrics, list) else DEFAULT_PLAYER_HUD_METRICS
+        )
         self.on_apply = on_apply
         self.current_cap = current_cap
 
@@ -232,78 +260,26 @@ class SettingsWindow:
             pass
 
         light = bool(self.config.get("light_theme", False))
-        bg = "#F2F3F8" if light else "#0E121B"
-        panel = "#FFFFFF" if light else "#111827"
-        fg = "#0E121B" if light else "#FFFFFF"
-        border = "#C6CDE1" if light else "#2A3451"
-        accent = "#2A3451" if light else "#A1ADCE"
-
+        palette = apply_ttk_theme(style, light)
+        bg = palette['background']
+        panel = palette['surface']
+        fg = palette['text']
+        border = palette['border']
+        accent = palette['accent']
         self.win.configure(bg=bg)
-        style.configure(".", background=bg, foreground=fg, font=("Segoe UI", 10))
-        style.configure("TFrame", background=bg)
-        style.configure("TLabel", background=bg, foreground=fg)
-        style.configure("TNotebook", background=bg, borderwidth=0)
-        style.configure("TNotebook.Tab", background=panel, foreground=fg, padding=(12, 7))
-        style.map("TNotebook.Tab", background=[("selected", "#2A3451" if light else "#1C2336")],
-                  foreground=[("selected", "#FFFFFF")])
-        style.configure("TEntry", fieldbackground=panel, foreground=fg,
-                        bordercolor=border, lightcolor=border, darkcolor=border,
-                        insertcolor=fg, insertwidth=2)
-        style.map("TEntry", fieldbackground=[("focus", panel)], foreground=[("focus", fg)])
-        style.configure("TSpinbox", fieldbackground=panel, foreground=fg,
-                        background=panel, arrowcolor=accent,
-                        bordercolor=border, lightcolor=border, darkcolor=border,
-                        insertcolor=fg, insertwidth=2)
-        style.map("TSpinbox",
-                  fieldbackground=[("focus", panel), ("active", panel)],
-                  foreground=[("focus", fg), ("active", fg)],
-                  background=[("focus", panel), ("active", panel)],
-                  arrowcolor=[("focus", accent), ("active", accent)])
-        style.configure("TCombobox", fieldbackground=panel, background=panel,
-                        foreground=fg, arrowcolor=accent,
-                        bordercolor=border, lightcolor=border, darkcolor=border)
-        style.map("TCombobox",
-                  fieldbackground=[("readonly", panel), ("focus", panel), ("active", panel)],
-                  foreground=[("readonly", fg), ("focus", fg), ("active", fg)],
-                  background=[("readonly", panel), ("focus", panel), ("active", panel)])
-        style.configure("TCheckbutton", background=bg, foreground=fg)
-        style.map("TCheckbutton", background=[("active", bg), ("pressed", bg), ("focus", bg)],
-                  foreground=[("active", fg), ("pressed", fg), ("focus", fg)])
-        style.configure("TLabelframe", background=bg, foreground=accent, bordercolor=border)
-        style.configure("TLabelframe.Label", background=bg, foreground=accent, font=("Segoe UI", 10, "bold"))
-        
-        # Treeview styling with fixed dark-mode active header
-        style.configure("Treeview", background=panel, fieldbackground=panel,
-                        foreground=fg, bordercolor=border, rowheight=24)
-        style.map("Treeview", background=[("selected", "#2A3451" if light else "#2563EB")],
-                  foreground=[("selected", "#FFFFFF")])
-
-        header_bg = "#E2E8F0" if light else "#1E293B"
-        header_active = "#CBD5E1" if light else "#334155"
-        header_fg = "#0E121B" if light else "#93C5FD"
-        style.configure(
-            "Treeview.Heading",
-            background=header_bg,
-            foreground=header_fg,
-            font=("Segoe UI", 9, "bold"),
-            relief="flat",
-            padding=4
-        )
-        style.map(
-            "Treeview.Heading",
-            background=[("active", header_active), ("pressed", header_active)],
-            foreground=[("active", header_fg), ("pressed", header_fg)]
-        )
 
         outer = ttk.Frame(self.win, padding=12)
         outer.pack(fill="both", expand=True)
 
-        header_frame = ttk.Frame(outer)
-        header_frame.pack(fill="x", pady=(0, 8))
+        header_frame = ttk.Frame(outer, style="Header.TFrame")
+        header_frame.pack(fill="x", pady=(2, 12))
+        ttk.Label(header_frame, text="НАСТРОЙКИ", style="Eyebrow.TLabel").pack(anchor="w")
+        ttk.Label(header_frame, text="Параметры анализа", style="Title.TLabel").pack(anchor="w")
         ttk.Label(
-            header_frame, text="⚙️ Настройки и параметры анализа",
-            font=("Segoe UI", 15, "bold")
-        ).pack(side="left")
+            header_frame,
+            text="Изменения сохраняются только после нажатия «Сохранить и применить».",
+            style="Subtitle.TLabel",
+        ).pack(anchor="w", pady=(1, 0))
 
         nb = ttk.Notebook(outer)
         nb.pack(fill="both", expand=True)
@@ -696,7 +672,8 @@ class SettingsWindow:
 
         ttk.Button(btn_bar, text="↩ Сбросить по умолчанию", command=self._reset).pack(side="left")
         ttk.Button(btn_bar, text="Отмена", command=self.win.destroy).pack(side="right", padx=(6, 0))
-        ttk.Button(btn_bar, text="💾 Сохранить и применить", command=self._apply).pack(side="right")
+        ttk.Button(btn_bar, text="💾 Сохранить и применить", style="Primary.TButton",
+                   command=self._apply).pack(side="right")
 
     def _build_detector_tab(self, tab_detector, light):
         self.detector_vars = {}
@@ -711,7 +688,7 @@ class SettingsWindow:
         ttk.Label(p_row, text="Пресет сенсора:", font=("Segoe UI", 9, "bold")).pack(side="left", padx=(0, 6))
 
         if "detector_presets" not in self.config or not isinstance(self.config.get("detector_presets"), dict):
-            self.config["detector_presets"] = dict(DEFAULT_DETECTOR_PRESETS)
+            self.config["detector_presets"] = deepcopy(DEFAULT_DETECTOR_PRESETS)
 
         preset_names = list(self.config["detector_presets"].keys())
         self.preset_var = tk.StringVar(value=preset_names[0] if preset_names else "По умолчанию (Default)")
@@ -1045,7 +1022,8 @@ class SettingsWindow:
 
         ttk.Button(btn_bar, text="↩ Сбросить по умолчанию", command=self._reset).pack(side="left")
         ttk.Button(btn_bar, text="Отмена", command=self.win.destroy).pack(side="right", padx=(6, 0))
-        ttk.Button(btn_bar, text="💾 Сохранить и применить", command=self._apply).pack(side="right")
+        ttk.Button(btn_bar, text="💾 Сохранить и применить", style="Primary.TButton",
+                   command=self._apply).pack(side="right")
 
     def _bind_unit_switch(self, var_val1, var_val2, unit_var, combo):
         def _on_unit_change(event=None):
@@ -1179,7 +1157,7 @@ class SettingsWindow:
             except Exception:
                 pass
         if "detector_presets" not in self.config or not isinstance(self.config["detector_presets"], dict):
-            self.config["detector_presets"] = dict(DEFAULT_DETECTOR_PRESETS)
+            self.config["detector_presets"] = deepcopy(DEFAULT_DETECTOR_PRESETS)
         self.config["detector_presets"][name] = p_data
         preset_names = list(self.config["detector_presets"].keys())
         if hasattr(self, 'cb_detector_presets'):
@@ -1197,7 +1175,7 @@ class SettingsWindow:
             del self.config["detector_presets"][name]
             preset_names = list(self.config["detector_presets"].keys())
             if not preset_names:
-                self.config["detector_presets"] = dict(DEFAULT_DETECTOR_PRESETS)
+                self.config["detector_presets"] = deepcopy(DEFAULT_DETECTOR_PRESETS)
                 preset_names = list(self.config["detector_presets"].keys())
             if hasattr(self, 'cb_detector_presets'):
                 self.cb_detector_presets.config(values=preset_names)
@@ -2023,8 +2001,18 @@ class SettingsWindow:
         if not name or not formula:
             messagebox.showwarning("Переменные", "Укажите имя переменной и формулу.", parent=self.win)
             return
-        if not name.isidentifier():
-            messagebox.showerror("Ошибка", f"Имя переменной «{name}» некорректно. Используйте буквы латиницы и цифры (например: TOTAL_RGB, NORM_B).", parent=self.win)
+        if not is_safe_variable_name(name):
+            messagebox.showerror(
+                "Ошибка",
+                f"Имя переменной «{name}» некорректно или зарезервировано. "
+                "Используйте латинские буквы, цифры и знак подчёркивания (например: TOTAL_RGB, NORM_B).",
+                parent=self.win,
+            )
+            return
+        try:
+            validate_formula(formula)
+        except FormulaValidationError as exc:
+            messagebox.showerror("Ошибка формулы", str(exc), parent=self.win)
             return
         self._custom_variables.append({"name": name, "formula": formula})
         self._refresh_custom_var_list()
@@ -2051,6 +2039,11 @@ class SettingsWindow:
         color = self.custom_color_var.get().strip() or "#00FFCC"
         if not name or not formula:
             messagebox.showwarning("Графики", "Укажите название и формулу графика.", parent=self.win)
+            return
+        try:
+            validate_formula(formula)
+        except FormulaValidationError as exc:
+            messagebox.showerror("Ошибка формулы", str(exc), parent=self.win)
             return
         self._custom_graphs.append({"name": name, "formula": formula, "color": color})
         self._refresh_custom_graph_list()
@@ -2127,7 +2120,7 @@ class SettingsWindow:
   • mean(x)                 — среднее значение
   • diff(x)                 — первая производная (градиент)
   • sin(x), cos(x)          — тригонометрические функции
-  • np.*                    — любые функции NumPy (np.gradient, np.std, np.clip)
+  • np.gradient, np.std, np.clip и другие разрешённые численные функции NumPy
 
 
 4. ПРАКТИЧЕСКИЕ ПРИМЕРЫ ГОТОВЫХ ФОРМУЛ

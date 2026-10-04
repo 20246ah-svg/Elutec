@@ -6,6 +6,8 @@ import socket
 import subprocess
 import threading
 import re
+from concurrent.futures import ThreadPoolExecutor, as_completed
+import ipaddress
 
 from ..config import LOW_LATENCY_FFMPEG_OPTIONS, get_default_save_folder
 from .ffmpeg_utils import find_ffmpeg_exe, ffmpeg_missing_message
@@ -626,52 +628,74 @@ def scan_cameras(max_index=6):
     return available
 
 def get_local_ip():
+    """Return the outbound IPv4 address without sending a network packet."""
     try:
-        s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
-        s.connect(("8.8.8.8", 80))
-        ip = s.getsockname()[0]
-        s.close()
-        return ip
-    except:
-        return "192.168.1.1"
+        with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as sock:
+            # UDP connect only asks the OS for a route; it does not transmit.
+            sock.connect(("8.8.8.8", 80))
+            return sock.getsockname()[0]
+    except OSError:
+        return None
 
-def scan_ip_cameras():
-    found = []
+
+def scan_ip_cameras(max_hosts=49, ports=None, timeout_sec=0.3, max_workers=16):
+    """Perform a bounded, user-initiated scan for common IP-camera endpoints.
+
+    The previous implementation spawned 245 unbounded threads and guessed a
+    `192.168.1.*` network when no adapter was available.  Scanning is now
+    skipped safely if an IPv4 route cannot be identified and concurrent probes
+    are capped.
+    """
     local_ip = get_local_ip()
-    subnet = '.'.join(local_ip.split('.')[:3])
-    ports = [8080, 80, 554, 4747, 7070]
-    print(f"📱 Сканирование сети {subnet}.x...")
-    
+    try:
+        address = ipaddress.ip_address(local_ip)
+    except (TypeError, ValueError):
+        print("⚠️ Не удалось определить IPv4-адрес для поиска IP-камер.")
+        return []
+    if address.version != 4:
+        print("⚠️ Поиск IP-камер поддерживает только IPv4-сети.")
+        return []
+
+    subnet = ".".join(str(address).split(".")[:3])
+    ports = tuple(ports or (8080, 80, 554, 4747, 7070))
+    host_count = max(1, min(int(max_hosts), 254))
+    worker_count = max(1, min(int(max_workers), 32))
+    print(f"📱 Сканирование сети {subnet}.x (до {host_count} адресов)...")
+
     def check_host(ip, port):
         try:
-            sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-            sock.settimeout(0.3)
-            result = sock.connect_ex((ip, port))
-            sock.close()
-            if result == 0:
-                url = f"http://{ip}:{port}/video"
-                test_cap = cv2.VideoCapture(url)
-                if test_cap.isOpened():
-                    ret, _ = test_cap.read()
-                    test_cap.release()
-                    if ret:
-                        found.append((url, f"IP Camera: {ip}:{port}"))
-                        print(f"✅ Найдена IP-камера: {ip}:{port}")
-        except:
-            pass
-    
-    threads = []
-    for i in range(1, 50):
-        ip = f"{subnet}.{i}"
-        for port in ports:
-            t = threading.Thread(target=check_host, args=(ip, port))
-            t.start()
-            threads.append(t)
-    
-    for t in threads:
-        t.join()
-    
-    return found
+            with socket.create_connection((ip, port), timeout=float(timeout_sec)):
+                pass
+            url = f"http://{ip}:{port}/video"
+            capture = cv2.VideoCapture(url)
+            try:
+                if not capture.isOpened():
+                    return None
+                ret, _ = capture.read()
+                if ret:
+                    return url, f"IP Camera: {ip}:{port}"
+            finally:
+                capture.release()
+        except (OSError, ValueError, cv2.error):
+            return None
+        return None
+
+    candidates = [
+        (f"{subnet}.{host}", port)
+        for host in range(1, host_count + 1)
+        for port in ports
+    ]
+    found = []
+    with ThreadPoolExecutor(max_workers=worker_count, thread_name_prefix="ip-camera-scan") as executor:
+        futures = [executor.submit(check_host, ip, port) for ip, port in candidates]
+        for future in as_completed(futures):
+            result = future.result()
+            if result is not None:
+                found.append(result)
+                print(f"✅ Найдена IP-камера: {result[1].replace('IP Camera: ', '', 1)}")
+
+    # The same device can answer several ports; retain a stable unique result.
+    return list(dict.fromkeys(found))
 
 def ivcam_setup_hint():
     return (
@@ -683,23 +707,65 @@ def ivcam_setup_hint():
     )
 
                                                                    
+def _roi_int(config, key, default):
+    """Read a numeric ROI setting without letting a malformed JSON value stop capture."""
+    try:
+        return int(round(float((config or {}).get(key, default))))
+    except (TypeError, ValueError):
+        return int(default)
+
+
+def normalize_roi(frame, config, min_size=10):
+    """Clamp an ROI to the real frame and return ``(x, y, width, height)``.
+
+    The previous implementation reported a 10-pixel ROI for frames smaller
+    than 10 pixels, while NumPy returned a smaller slice.  A circular mask then
+    had a different shape from the ROI and OpenCV raised an exception.  This
+    helper makes the reported ROI and the actual slice identical.
+    """
+    if frame is None or not hasattr(frame, "shape") or len(frame.shape) < 2:
+        raise ValueError("Невозможно вычислить ROI: кадр отсутствует или имеет неверную форму.")
+
+    frame_h, frame_w = frame.shape[:2]
+    if frame_h <= 0 or frame_w <= 0:
+        raise ValueError("Невозможно вычислить ROI: кадр имеет нулевой размер.")
+
+    x = _roi_int(config, "roi_x", 0)
+    y = _roi_int(config, "roi_y", 0)
+    requested_w = _roi_int(config, "roi_w", frame_w)
+    requested_h = _roi_int(config, "roi_h", frame_h)
+    safe_x = max(0, min(x, frame_w - 1))
+    safe_y = max(0, min(y, frame_h - 1))
+
+    # A small ROI is still useful for a tiny test frame.  Its lower bound must
+    # never exceed the remaining frame dimensions.
+    min_w = min(max(1, int(min_size)), frame_w - safe_x)
+    min_h = min(max(1, int(min_size)), frame_h - safe_y)
+    safe_w = max(min_w, min(max(1, requested_w), frame_w - safe_x))
+    safe_h = max(min_h, min(max(1, requested_h), frame_h - safe_y))
+    return safe_x, safe_y, safe_w, safe_h
+
+
 def compute_roi_means(frame, config):
-    x = config['roi_x']
-    y = config['roi_y']
-    w = config['roi_w']
-    h = config['roi_h']
+    """Return BGR means and the actual clamped ROI for a video frame."""
+    if frame is None or not hasattr(frame, "shape") or len(frame.shape) < 2:
+        raise ValueError("Невозможно вычислить среднее RGB: кадр отсутствует.")
+    if frame.ndim == 2:
+        frame = cv2.cvtColor(frame, cv2.COLOR_GRAY2BGR)
+    elif frame.ndim == 3 and frame.shape[2] == 1:
+        frame = cv2.cvtColor(frame, cv2.COLOR_GRAY2BGR)
+    elif frame.ndim != 3 or frame.shape[2] < 3:
+        raise ValueError("Невозможно вычислить среднее RGB: нужен BGR/RGB кадр.")
 
+    safe_x, safe_y, safe_w, safe_h = normalize_roi(frame, config)
     h_f, w_f = frame.shape[:2]
-    safe_x = max(0, min(x, w_f - 1))
-    safe_y = max(0, min(y, h_f - 1))
-    safe_w = max(10, min(w, w_f - safe_x))
-    safe_h = max(10, min(h, h_f - safe_y))
+    roi = frame[safe_y:safe_y + safe_h, safe_x:safe_x + safe_w, :3]
+    if roi.size == 0:
+        raise ValueError("Невозможно вычислить среднее RGB: ROI пустая.")
 
-    roi = frame[safe_y:safe_y + safe_h, safe_x:safe_x + safe_w]
-
-    if config.get('roi_shape', 'rect') == 'circle':
+    if str((config or {}).get("roi_shape", "rect")).lower() == "circle":
         mask = np.zeros((safe_h, safe_w), dtype=np.uint8)
-        radius = min(safe_w, safe_h) // 2
+        radius = max(1, min(safe_w, safe_h) // 2)
         center = (safe_w // 2, safe_h // 2)
         cv2.circle(mask, center, radius, 255, -1)
         mean_b, mean_g, mean_r, _ = cv2.mean(roi, mask=mask)

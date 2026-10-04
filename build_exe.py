@@ -24,6 +24,7 @@ else:
     MAIN_SCRIPT = os.path.join(SCRIPT_DIR, "main.py")
     SRC_DIR = os.path.join(SCRIPT_DIR, "src")
 
+MIICAM_DLL = os.path.join(PROJECT_ROOT, "miicam.dll")
 DIST_DIR = os.path.join(SCRIPT_DIR, "dist")
 BUILD_DIR = os.path.join(SCRIPT_DIR, "build")
 APP_NAME = "Elutek"
@@ -71,10 +72,14 @@ def build():
         "--hidden-import", "tkinter.colorchooser",
     ]
     
-    # Добавление исходных файлов src в сборку
+    # Add package data and the optional scientific-camera driver.
+    sep = ";" if sys.platform == "win32" else ":"
     if os.path.isdir(SRC_DIR):
-        sep = ";" if sys.platform == "win32" else ":"
         cmd.extend(["--add-data", f"{SRC_DIR}{sep}src"])
+    if os.path.isfile(MIICAM_DLL):
+        # MiiCamCapture searches the application root, which is also the root
+        # of PyInstaller's onedir distribution.
+        cmd.extend(["--add-binary", f"{MIICAM_DLL}{sep}."])
 
     cmd.append(MAIN_SCRIPT)
     

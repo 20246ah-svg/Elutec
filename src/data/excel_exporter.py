@@ -12,11 +12,19 @@ from openpyxl.utils import get_column_letter
 
 from ..analysis.annotations import Annotation, AnnotationManager
 from ..utils.math_utils import adaptive_log_y_range, _py_scalar
+from ..utils.formulas import evaluate_formula, is_safe_variable_name
 from ..config import RGB_Y_MIN, RGB_Y_MAX                                                           
+
+def _excel_safe_value(value):
+    """Prevent annotation text and user graph names from becoming Excel formulas."""
+    if isinstance(value, str) and value.startswith(("=", "+", "-", "@")):
+        return "'" + value
+    return value
+
 
 def _hex_to_fill(hex_color: str) -> PatternFill:
     hex_clean = str(hex_color or '').lstrip('#').upper()
-    if len(hex_clean) != 6:
+    if len(hex_clean) != 6 or any(char not in '0123456789ABCDEF' for char in hex_clean):
         hex_clean = 'FF4444'
     return PatternFill(
         start_color=hex_clean, end_color=hex_clean, fill_type="solid"
@@ -84,7 +92,7 @@ def _filter_annotations(annotations, is_auto: Optional[bool] = None) -> List[Ann
 def _fill_annotation_sheet_headers(ws, has_log: bool = True):
     headers = _marker_table_headers(has_log)
     for col, header in enumerate(headers, 1):
-        cell = ws.cell(row=1, column=col, value=header)
+        cell = ws.cell(row=1, column=col, value=_excel_safe_value(header))
         cell.font = Font(bold=True, size=12)
         cell.alignment = Alignment(horizontal='center')
         cell.fill = PatternFill(start_color="D3D3D3", end_color="D3D3D3", fill_type="solid")
@@ -99,7 +107,7 @@ def _fill_auto_annotation_sheet_headers(ws):
     ]
     widths = [5, 12, 14, 8, 8, 8, 18, 16, 30, 12]
     for col, header in enumerate(headers, 1):
-        cell = ws.cell(row=1, column=col, value=header)
+        cell = ws.cell(row=1, column=col, value=_excel_safe_value(header))
         cell.font = Font(bold=True, size=12)
         cell.alignment = Alignment(horizontal='center')
         cell.fill = PatternFill(start_color="D3D3D3", end_color="D3D3D3", fill_type="solid")
@@ -133,10 +141,10 @@ def _write_auto_annotations_to_sheet(ws, annotations):
             _py_scalar(ann.b),
             _py_scalar(ann.rgb_sum_slope_30s),
             _py_scalar(ann.transition_score),
-            ann.description,
+            _excel_safe_value(ann.description),
         ]
         for col, value in enumerate(row_values, 1):
-            ws.cell(row=row_idx, column=col, value=value)
+            ws.cell(row=row_idx, column=col, value=_excel_safe_value(value))
 
         color_cell = ws.cell(row=row_idx, column=len(row_values) + 1, value="")
         color_cell.fill = _hex_to_fill(ann.color)
@@ -171,10 +179,10 @@ def _write_annotations_to_sheet(ws, annotations, saved_data: Optional[List] = No
         ]
         if has_log:
             row_values.extend([vals['log_br'], vals['log_bg']])
-        row_values.append(ann.description)
+        row_values.append(_excel_safe_value(ann.description))
 
         for col, value in enumerate(row_values, 1):
-            cell = ws.cell(row=row_idx, column=col, value=value)
+            cell = ws.cell(row=row_idx, column=col, value=_excel_safe_value(value))
             cell.fill = row_fill
 
         color_cell = ws.cell(row=row_idx, column=color_col, value="")
@@ -195,7 +203,7 @@ def _write_markers_block(ws, annotations, saved_data=None, has_log=True, start_c
     headers = _marker_table_headers(has_log)
     header_row = start_row + 1
     for col_offset, header in enumerate(headers):
-        cell = ws.cell(row=header_row, column=start_col + col_offset, value=header)
+        cell = ws.cell(row=header_row, column=start_col + col_offset, value=_excel_safe_value(header))
         cell.font = Font(bold=True, size=11)
         cell.alignment = Alignment(horizontal='center')
         cell.fill = header_fill
@@ -227,10 +235,10 @@ def _write_markers_block(ws, annotations, saved_data=None, has_log=True, start_c
         ]
         if has_log:
             row_values.extend([vals['log_br'], vals['log_bg']])
-        row_values.append(ann.description)
+        row_values.append(_excel_safe_value(ann.description))
 
         for col_offset, value in enumerate(row_values):
-            cell = ws.cell(row=row, column=start_col + col_offset, value=value)
+            cell = ws.cell(row=row, column=start_col + col_offset, value=_excel_safe_value(value))
             cell.fill = row_fill
 
         color_cell = ws.cell(row=row, column=start_col + color_col_offset, value="")
@@ -269,7 +277,7 @@ def _apply_marker_chart_columns(ws, saved_data, annotations, has_log, log_y_max)
     row_map = _annotation_row_map(saved_data, annotations)
 
     for col, header in ((layout['marker_rgb'], 'Метка ▲'),):
-        cell = ws.cell(row=1, column=col, value=header)
+        cell = ws.cell(row=1, column=col, value=_excel_safe_value(header))
         cell.font = Font(bold=True, size=12)
         cell.alignment = Alignment(horizontal='center')
         cell.fill = PatternFill(
@@ -317,7 +325,7 @@ def _fill_all_marker_sheet_headers(ws, has_log: bool = True):
         widths.extend([13, 13])
     widths.extend([18, 17, 34, 10])
     for col, header in enumerate(headers, 1):
-        cell = ws.cell(row=1, column=col, value=header)
+        cell = ws.cell(row=1, column=col, value=_excel_safe_value(header))
         cell.font = Font(bold=True, size=11)
         cell.alignment = Alignment(horizontal='center')
         cell.fill = PatternFill(start_color="D3D3D3", end_color="D3D3D3", fill_type="solid")
@@ -355,10 +363,10 @@ def _write_marker_rows(ws, annotations, saved_data=None, has_log=True, is_auto=N
         row_values.extend([
             _py_scalar(ann.rgb_sum_slope_30s),
             _py_scalar(ann.transition_score),
-            ann.description,
+            _excel_safe_value(ann.description),
         ])
         for col, value in enumerate(row_values, 1):
-            cell = ws.cell(row=row_idx, column=col, value=value)
+            cell = ws.cell(row=row_idx, column=col, value=_excel_safe_value(value))
             cell.fill = auto_fill if ann.is_auto else row_fill
         ws.cell(row=row_idx, column=color_col, value='').fill = _hex_to_fill(ann.color)
     ws.auto_filter.ref = f"A1:{get_column_letter(len(headers))}{max(1, ws.max_row)}"
@@ -386,7 +394,7 @@ def _write_graph_data_sheet(ws, saved_data, custom_graphs=None, custom_variables
             headers.append(name)
 
     for col, header in enumerate(headers, 1):
-        cell = ws.cell(row=1, column=col, value=header)
+        cell = ws.cell(row=1, column=col, value=_excel_safe_value(header))
         cell.font = Font(bold=True, size=11)
         cell.alignment = Alignment(horizontal='center')
         cell.fill = PatternFill(start_color="D3D3D3", end_color="D3D3D3", fill_type="solid")
@@ -435,23 +443,21 @@ def _write_graph_data_sheet(ws, saved_data, custom_graphs=None, custom_variables
             'log_ratio_speed30': col(18) if has_log else np.full(len(saved_data), np.nan),
             'rgb_sum_acceleration30': col(19) if has_log else np.full(len(saved_data), np.nan),
         }
-        safe_builtins = {'abs': abs, 'min': min, 'max': max, 'round': round, 'float': float, 'int': int}
-
         # Evaluate custom variables first
         for cv in custom_variables:
             v_name = str(cv.get('name', '')).strip()
             v_formula = str(cv.get('formula', '')).strip()
-            if v_name and v_formula and v_name.isidentifier():
+            if v_name and v_formula and is_safe_variable_name(v_name, set(env)):
                 try:
-                    v_val = eval(v_formula, {'__builtins__': safe_builtins}, env)
+                    v_val = evaluate_formula(v_formula, env)
                     env[v_name] = np.asarray(v_val, dtype=np.float64)
-                except Exception:
+                except (ValueError, TypeError):
                     pass
 
         custom_values = []
         for name, formula in valid_custom:
             try:
-                value = eval(formula, {'__builtins__': safe_builtins}, env)
+                value = evaluate_formula(formula, env)
                 if np.isscalar(value):
                     values = np.full(len(saved_data), float(value), dtype=np.float64)
                 else:

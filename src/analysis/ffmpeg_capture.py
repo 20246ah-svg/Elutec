@@ -29,8 +29,8 @@ class FFMpegFileCapture:
         self._opened = False
         self._current_frame_idx = 0
         self._probe()
-        if self._opened:
-            self._start_pipe(0.0)
+        if self._opened and not self._start_pipe(0.0):
+            self._opened = False
 
     def _probe(self):
         if not os.path.isfile(self.file_path) or not self.ffmpeg_exe:
@@ -60,7 +60,7 @@ class FFMpegFileCapture:
     def _start_pipe(self, start_sec=0.0):
         self._close_pipe()
         if not self._opened or not self.ffmpeg_exe:
-            return
+            return False
         flags = getattr(subprocess, 'CREATE_NO_WINDOW', 0)
         cmd = [self.ffmpeg_exe, '-hide_banner', '-loglevel', 'error']
         if start_sec > 0.05:
@@ -80,10 +80,12 @@ class FFMpegFileCapture:
                 stderr=subprocess.DEVNULL,
                 stdin=subprocess.DEVNULL,
                 bufsize=10 * self.width * self.height * 3,
-                creationflags=flags
+                creationflags=flags,
             )
-        except Exception:
+            return True
+        except (OSError, ValueError):
             self._proc = None
+            return False
 
     def _close_pipe(self):
         if self._proc is not None:
@@ -98,20 +100,36 @@ class FFMpegFileCapture:
             self._proc = None
 
     def isOpened(self):
-        return self._opened and (self._proc is not None or os.path.isfile(self.file_path))
+        return bool(self._opened and self._proc is not None and self._proc.poll() is None)
+
+    def _read_exact(self, byte_count):
+        """Read one complete raw-video frame; pipe reads may be partial."""
+        if self._proc is None or self._proc.stdout is None:
+            return b""
+        chunks = []
+        remaining = int(byte_count)
+        while remaining > 0:
+            chunk = self._proc.stdout.read(remaining)
+            if not chunk:
+                break
+            chunks.append(chunk)
+            remaining -= len(chunk)
+        return b"".join(chunks)
 
     def read(self):
         if self._proc is None or self._proc.stdout is None:
             return False, None
         frame_size = self.width * self.height * 3
         try:
-            raw = self._proc.stdout.read(frame_size)
+            raw = self._read_exact(frame_size)
             if len(raw) != frame_size:
+                self._opened = False
                 return False, None
             frame = np.frombuffer(raw, dtype=np.uint8).reshape((self.height, self.width, 3)).copy()
             self._current_frame_idx += 1
             return True, frame
-        except Exception:
+        except (OSError, ValueError):
+            self._opened = False
             return False, None
 
     def grab(self):
@@ -123,13 +141,11 @@ class FFMpegFileCapture:
             target_frame = max(0, int(value))
             target_sec = target_frame / self.fps if self.fps > 0 else 0.0
             self._current_frame_idx = target_frame
-            self._start_pipe(target_sec)
-            return True
+            return self._start_pipe(target_sec)
         elif prop == cv2.CAP_PROP_POS_MSEC:
             target_sec = max(0.0, float(value) / 1000.0)
             self._current_frame_idx = int(target_sec * self.fps)
-            self._start_pipe(target_sec)
-            return True
+            return self._start_pipe(target_sec)
         return True
 
     def get(self, prop):

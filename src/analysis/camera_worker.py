@@ -22,46 +22,66 @@ from ..config import (
 )
 
 class CameraWorker:
+    _SERIES_NAMES = (
+        "time_data", "r_data", "g_data", "b_data", "log_data", "log_bg_data",
+        "rgb_sum_data", "rgb_sum_smooth_data", "rgb_sum_slope10_data", "rgb_sum_slope30_data",
+        "tri_x_data", "tri_y_data", "rgb_vector_speed30_data", "chromaticity_speed30_data",
+        "k_chrom_previous_data", "log_ratio_speed30_data", "rgb_sum_acceleration30_data",
+        "transition_score_data", "rate_b_data", "rate_r_data", "rate_g_data", "rate_log_data",
+        "rate_log_bg_data", "fastslow_log_data", "fastslow_log_bg_data",
+    )
+    _GRAPH_ARRAY_NAMES = (
+        "_graph_t", "_graph_r", "_graph_g", "_graph_b", "_graph_log", "_graph_log_bg",
+        "_graph_rgb_sum", "_graph_rgb_sum_smooth", "_graph_rgb_sum_slope10", "_graph_rgb_sum_slope30",
+        "_graph_rgb_vector_speed30", "_graph_chromaticity_speed30", "_graph_k_chrom_previous",
+        "_graph_log_ratio_speed30", "_graph_rgb_sum_acceleration30", "_graph_transition_score",
+        "_graph_tri_x", "_graph_tri_y",
+    )
+
     def __init__(self, cap, config, start_time, save_interval_ms=10, max_points=108000, raw_csv_path=None):
         self.cap = cap
         self.config = config
         self.start_time = start_time
-        self.save_interval_ms = save_interval_ms
+        self.save_interval_ms = max(1, int(save_interval_ms))
+        self.max_points = max(1, int(max_points))
         self._lock = threading.RLock()
         self._running = False
         self._thread = None
 
-        self.time_data = deque(maxlen=max_points)
-        self.r_data = deque(maxlen=max_points)
-        self.g_data = deque(maxlen=max_points)
-        self.b_data = deque(maxlen=max_points)
-        self.log_data = deque(maxlen=max_points)
-        self.log_bg_data = deque(maxlen=max_points)
-        self.rgb_sum_data = deque(maxlen=max_points)
-        self.rgb_sum_smooth_data = deque(maxlen=max_points)
-        self.rgb_sum_slope10_data = deque(maxlen=max_points)
-        self.rgb_sum_slope30_data = deque(maxlen=max_points)
-        self.tri_x_data = deque(maxlen=max_points)
-        self.tri_y_data = deque(maxlen=max_points)
-        self.rgb_vector_speed30_data = deque(maxlen=max_points)
-        self.chromaticity_speed30_data = deque(maxlen=max_points)
-        self.k_chrom_previous_data = deque(maxlen=max_points)
-        self.log_ratio_speed30_data = deque(maxlen=max_points)
-        self.rgb_sum_acceleration30_data = deque(maxlen=max_points)
-        self.transition_score_data = deque(maxlen=max_points)
-        self.rate_b_data = deque(maxlen=max_points)
-        self.rate_r_data = deque(maxlen=max_points)
-        self.rate_g_data = deque(maxlen=max_points)
-        self.rate_log_data = deque(maxlen=max_points)
-        self.rate_log_bg_data = deque(maxlen=max_points)
-        self.fastslow_log_data = deque(maxlen=max_points)
-        self.fastslow_log_bg_data = deque(maxlen=max_points)
+        self.time_data = deque(maxlen=self.max_points)
+        self.r_data = deque(maxlen=self.max_points)
+        self.g_data = deque(maxlen=self.max_points)
+        self.b_data = deque(maxlen=self.max_points)
+        self.log_data = deque(maxlen=self.max_points)
+        self.log_bg_data = deque(maxlen=self.max_points)
+        self.rgb_sum_data = deque(maxlen=self.max_points)
+        self.rgb_sum_smooth_data = deque(maxlen=self.max_points)
+        self.rgb_sum_slope10_data = deque(maxlen=self.max_points)
+        self.rgb_sum_slope30_data = deque(maxlen=self.max_points)
+        self.tri_x_data = deque(maxlen=self.max_points)
+        self.tri_y_data = deque(maxlen=self.max_points)
+        self.rgb_vector_speed30_data = deque(maxlen=self.max_points)
+        self.chromaticity_speed30_data = deque(maxlen=self.max_points)
+        self.k_chrom_previous_data = deque(maxlen=self.max_points)
+        self.log_ratio_speed30_data = deque(maxlen=self.max_points)
+        self.rgb_sum_acceleration30_data = deque(maxlen=self.max_points)
+        self.transition_score_data = deque(maxlen=self.max_points)
+        self.rate_b_data = deque(maxlen=self.max_points)
+        self.rate_r_data = deque(maxlen=self.max_points)
+        self.rate_g_data = deque(maxlen=self.max_points)
+        self.rate_log_data = deque(maxlen=self.max_points)
+        self.rate_log_bg_data = deque(maxlen=self.max_points)
+        self.fastslow_log_data = deque(maxlen=self.max_points)
+        self.fastslow_log_bg_data = deque(maxlen=self.max_points)
         self._ema_state = {}
         self.saved_data = []
         self.last_save_ms = 0
         self.frame_count = 0
+        self.point_count = 0
+        self.excel_rows_written = 0
         self.graph_version = 0
         self._graph_len = 0
+        self._graph_start = 0
         self._graph_t = np.empty(0, dtype=np.float64)
         self._graph_r = np.empty(0, dtype=np.float64)
         self._graph_g = np.empty(0, dtype=np.float64)
@@ -134,6 +154,14 @@ class CameraWorker:
             except Exception as init_err:
                 pass
 
+    def _clear_measurements(self):
+        """Clear every synchronized data series and all derived-state caches."""
+        for name in self._SERIES_NAMES:
+            getattr(self, name).clear()
+        self.saved_data.clear()
+        self._ema_state.clear()
+        self.point_count = 0
+
     def _truncate_data_to_time(self, target_ms):
         """Обрезает все буферы данных до момента target_ms при перемотке назад,
         гарантируя монотонность оси X и единственную чистую линию графика."""
@@ -143,34 +171,9 @@ class CameraWorker:
 
         target_val = float(target_ms)
         if target_val <= 50.0:
-            self.time_data.clear()
-            self.r_data.clear()
-            self.g_data.clear()
-            self.b_data.clear()
-            self.log_data.clear()
-            self.log_bg_data.clear()
-            self.rgb_sum_data.clear()
-            self.rgb_sum_smooth_data.clear()
-            self.rgb_sum_slope10_data.clear()
-            self.rgb_sum_slope30_data.clear()
-            self.tri_x_data.clear()
-            self.tri_y_data.clear()
-            self.rgb_vector_speed30_data.clear()
-            self.chromaticity_speed30_data.clear()
-            self.k_chrom_previous_data.clear()
-            self.log_ratio_speed30_data.clear()
-            self.rgb_sum_acceleration30_data.clear()
-            self.transition_score_data.clear()
-            self.rate_b_data.clear()
-            self.rate_r_data.clear()
-            self.rate_g_data.clear()
-            self.rate_log_data.clear()
-            self.rate_log_bg_data.clear()
-            self.fastslow_log_data.clear()
-            self.fastslow_log_bg_data.clear()
-            self.saved_data.clear()
-            self.point_count = 0
+            self._clear_measurements()
             self._graph_len = 0
+            self._graph_start = 0
             self.graph_version += 1
             self.last_save_ms = -1e9
             return
@@ -183,34 +186,9 @@ class CameraWorker:
                 break
 
         if keep_count == 0:
-            self.time_data.clear()
-            self.r_data.clear()
-            self.g_data.clear()
-            self.b_data.clear()
-            self.log_data.clear()
-            self.log_bg_data.clear()
-            self.rgb_sum_data.clear()
-            self.rgb_sum_smooth_data.clear()
-            self.rgb_sum_slope10_data.clear()
-            self.rgb_sum_slope30_data.clear()
-            self.tri_x_data.clear()
-            self.tri_y_data.clear()
-            self.rgb_vector_speed30_data.clear()
-            self.chromaticity_speed30_data.clear()
-            self.k_chrom_previous_data.clear()
-            self.log_ratio_speed30_data.clear()
-            self.rgb_sum_acceleration30_data.clear()
-            self.transition_score_data.clear()
-            self.rate_b_data.clear()
-            self.rate_r_data.clear()
-            self.rate_g_data.clear()
-            self.rate_log_data.clear()
-            self.rate_log_bg_data.clear()
-            self.fastslow_log_data.clear()
-            self.fastslow_log_bg_data.clear()
-            self.saved_data.clear()
-            self.point_count = 0
+            self._clear_measurements()
             self._graph_len = 0
+            self._graph_start = 0
             self.graph_version += 1
             self.last_save_ms = target_val - self.save_interval_ms
             return
@@ -238,6 +216,9 @@ class CameraWorker:
             self.saved_data = self.saved_data[:keep_count]
 
         self.point_count = keep_count
+        # EMA state cannot be reconstructed from a truncated tail.  Reset it so
+        # a post-seek sample never uses future (discarded) data.
+        self._ema_state.clear()
         self._graph_len = keep_count
         self.last_save_ms = self.time_data[-1] if self.time_data else (target_val - self.save_interval_ms)
         self.graph_version += 1
@@ -245,7 +226,7 @@ class CameraWorker:
         # Синхронизируем массивы графиков
         if keep_count > 0:
             if len(self._graph_t) < keep_count:
-                alloc_size = max(keep_count * 2, int(self.config.get('max_points', 108000)))
+                alloc_size = min(self.max_points, max(keep_count, min(self.max_points, keep_count * 2)))
                 self._graph_t = np.empty(alloc_size, dtype=np.float64)
                 self._graph_r = np.empty(alloc_size, dtype=np.float64)
                 self._graph_g = np.empty(alloc_size, dtype=np.float64)
@@ -265,6 +246,7 @@ class CameraWorker:
                 self._graph_tri_x = np.empty(alloc_size, dtype=np.float64)
                 self._graph_tri_y = np.empty(alloc_size, dtype=np.float64)
 
+            self._graph_start = 0
             if len(self.time_data) == keep_count:
                 self._graph_t[:keep_count] = np.array(self.time_data, dtype=np.float64)
             if len(self.r_data) == keep_count:
@@ -324,27 +306,9 @@ class CameraWorker:
 
     def clear_data(self):
         with self._lock:
-            self.time_data.clear()
-            self.r_data.clear()
-            self.g_data.clear()
-            self.b_data.clear()
-            self.log_data.clear()
-            self.log_bg_data.clear()
-            self.rgb_sum_data.clear()
-            self.rgb_sum_smooth_data.clear()
-            self.rgb_sum_slope10_data.clear()
-            self.rgb_sum_slope30_data.clear()
-            self.tri_x_data.clear()
-            self.tri_y_data.clear()
-            self.rgb_vector_speed30_data.clear()
-            self.chromaticity_speed30_data.clear()
-            self.k_chrom_previous_data.clear()
-            self.log_ratio_speed30_data.clear()
-            self.rgb_sum_acceleration30_data.clear()
-            self.transition_score_data.clear()
-            self.saved_data.clear()
-            self.point_count = 0
+            self._clear_measurements()
             self._graph_len = 0
+            self._graph_start = 0
             self.graph_version += 1
             self.last_save_ms = -1e9
             self.excel_rows_written = 0
@@ -400,51 +364,55 @@ class CameraWorker:
                 target_frame = max(0, min(target_frame, self.total_frames - 1))
             self._seek_target_frame = target_frame
 
+    def _graph_values(self, array):
+        """Return the graph ring buffer in chronological order."""
+        if self._graph_len <= 0:
+            return np.empty(0, dtype=np.float64)
+        end = self._graph_start + self._graph_len
+        if end <= len(array):
+            return array[self._graph_start:end]
+        return np.concatenate((array[self._graph_start:], array[:end % len(array)]))
+
+    def _ensure_graph_capacity(self, required):
+        """Grow graph storage up to ``max_points`` while preserving ordering."""
+        current = len(self._graph_t)
+        if required <= current or current >= self.max_points:
+            return
+        capacity = min(self.max_points, max(required, current * 2 if current else min(4096, self.max_points)))
+        previous = {name: self._graph_values(getattr(self, name)) for name in self._GRAPH_ARRAY_NAMES}
+        for name in self._GRAPH_ARRAY_NAMES:
+            replacement = np.empty(capacity, dtype=np.float64)
+            values = previous[name]
+            if len(values):
+                replacement[:len(values)] = values
+            setattr(self, name, replacement)
+        self._graph_start = 0
+
     def _append_graph_point(self, t, r, g, b, log_v, log_bg_v, tri_x, tri_y,
                             rgb_sum, rgb_sum_smooth, rgb_sum_slope10, rgb_sum_slope30,
                             rgb_vector_speed30, chromaticity_speed30, k_chrom_previous,
                             log_ratio_speed30, rgb_sum_acceleration30, transition_score):
-        n = self._graph_len + 1
-        if n > len(self._graph_t):
-            new_cap = max(n, len(self._graph_t) * 2 if len(self._graph_t) else 4096)
-            self._graph_t = np.resize(self._graph_t, new_cap)
-            self._graph_r = np.resize(self._graph_r, new_cap)
-            self._graph_g = np.resize(self._graph_g, new_cap)
-            self._graph_b = np.resize(self._graph_b, new_cap)
-            self._graph_log = np.resize(self._graph_log, new_cap)
-            self._graph_log_bg = np.resize(self._graph_log_bg, new_cap)
-            self._graph_rgb_sum = np.resize(self._graph_rgb_sum, new_cap)
-            self._graph_rgb_sum_smooth = np.resize(self._graph_rgb_sum_smooth, new_cap)
-            self._graph_rgb_sum_slope10 = np.resize(self._graph_rgb_sum_slope10, new_cap)
-            self._graph_rgb_sum_slope30 = np.resize(self._graph_rgb_sum_slope30, new_cap)
-            self._graph_rgb_vector_speed30 = np.resize(self._graph_rgb_vector_speed30, new_cap)
-            self._graph_chromaticity_speed30 = np.resize(self._graph_chromaticity_speed30, new_cap)
-            self._graph_k_chrom_previous = np.resize(self._graph_k_chrom_previous, new_cap)
-            self._graph_log_ratio_speed30 = np.resize(self._graph_log_ratio_speed30, new_cap)
-            self._graph_rgb_sum_acceleration30 = np.resize(self._graph_rgb_sum_acceleration30, new_cap)
-            self._graph_transition_score = np.resize(self._graph_transition_score, new_cap)
-            self._graph_tri_x = np.resize(self._graph_tri_x, new_cap)
-            self._graph_tri_y = np.resize(self._graph_tri_y, new_cap)
-        idx = self._graph_len
-        self._graph_t[idx] = t
-        self._graph_r[idx] = r
-        self._graph_g[idx] = g
-        self._graph_b[idx] = b
-        self._graph_log[idx] = log_v
-        self._graph_log_bg[idx] = log_bg_v
-        self._graph_rgb_sum[idx] = rgb_sum
-        self._graph_rgb_sum_smooth[idx] = rgb_sum_smooth
-        self._graph_rgb_sum_slope10[idx] = rgb_sum_slope10
-        self._graph_rgb_sum_slope30[idx] = rgb_sum_slope30
-        self._graph_rgb_vector_speed30[idx] = rgb_vector_speed30
-        self._graph_chromaticity_speed30[idx] = chromaticity_speed30
-        self._graph_k_chrom_previous[idx] = k_chrom_previous
-        self._graph_log_ratio_speed30[idx] = log_ratio_speed30
-        self._graph_rgb_sum_acceleration30[idx] = rgb_sum_acceleration30
-        self._graph_transition_score[idx] = transition_score
-        self._graph_tri_x[idx] = tri_x
-        self._graph_tri_y[idx] = tri_y
-        self._graph_len = n
+        self._ensure_graph_capacity(self._graph_len + 1)
+        capacity = len(self._graph_t)
+        if capacity == 0:
+            return
+        if self._graph_len < capacity:
+            index = (self._graph_start + self._graph_len) % capacity
+            self._graph_len += 1
+        else:
+            # History is a fixed-size ring: discard the oldest point in O(1),
+            # rather than growing arrays for an unbounded live session.
+            index = self._graph_start
+            self._graph_start = (self._graph_start + 1) % capacity
+
+        values = (
+            t, r, g, b, log_v, log_bg_v, rgb_sum, rgb_sum_smooth,
+            rgb_sum_slope10, rgb_sum_slope30, rgb_vector_speed30,
+            chromaticity_speed30, k_chrom_previous, log_ratio_speed30,
+            rgb_sum_acceleration30, transition_score, tri_x, tri_y,
+        )
+        for name, value in zip(self._GRAPH_ARRAY_NAMES, values):
+            getattr(self, name)[index] = value
 
     def start(self):
         self._running = True
@@ -700,22 +668,22 @@ class CameraWorker:
                 'frame': frame,
                 'means': self.current_means,
                 'roi_info': self.roi_info,
-                'graph_t': self._graph_t[:self._graph_len],
-                'graph_r': self._graph_r[:self._graph_len],
-                'graph_g': self._graph_g[:self._graph_len],
-                'graph_b': self._graph_b[:self._graph_len],
-                'graph_log': self._graph_log[:self._graph_len],
-                'graph_log_bg': self._graph_log_bg[:self._graph_len],
-                'graph_rgb_sum': self._graph_rgb_sum[:self._graph_len],
-                'graph_rgb_sum_smooth': self._graph_rgb_sum_smooth[:self._graph_len],
-                'graph_rgb_sum_slope10': self._graph_rgb_sum_slope10[:self._graph_len],
-                'graph_rgb_sum_slope30': self._graph_rgb_sum_slope30[:self._graph_len],
-                'graph_rgb_vector_speed30': self._graph_rgb_vector_speed30[:self._graph_len],
-                'graph_chromaticity_speed30': self._graph_chromaticity_speed30[:self._graph_len],
-                'graph_k_chrom_previous': self._graph_k_chrom_previous[:self._graph_len],
-                'graph_log_ratio_speed30': self._graph_log_ratio_speed30[:self._graph_len],
-                'graph_rgb_sum_acceleration30': self._graph_rgb_sum_acceleration30[:self._graph_len],
-                'graph_transition_score': self._graph_transition_score[:self._graph_len],
+                'graph_t': self._graph_values(self._graph_t),
+                'graph_r': self._graph_values(self._graph_r),
+                'graph_g': self._graph_values(self._graph_g),
+                'graph_b': self._graph_values(self._graph_b),
+                'graph_log': self._graph_values(self._graph_log),
+                'graph_log_bg': self._graph_values(self._graph_log_bg),
+                'graph_rgb_sum': self._graph_values(self._graph_rgb_sum),
+                'graph_rgb_sum_smooth': self._graph_values(self._graph_rgb_sum_smooth),
+                'graph_rgb_sum_slope10': self._graph_values(self._graph_rgb_sum_slope10),
+                'graph_rgb_sum_slope30': self._graph_values(self._graph_rgb_sum_slope30),
+                'graph_rgb_vector_speed30': self._graph_values(self._graph_rgb_vector_speed30),
+                'graph_chromaticity_speed30': self._graph_values(self._graph_chromaticity_speed30),
+                'graph_k_chrom_previous': self._graph_values(self._graph_k_chrom_previous),
+                'graph_log_ratio_speed30': self._graph_values(self._graph_log_ratio_speed30),
+                'graph_rgb_sum_acceleration30': self._graph_values(self._graph_rgb_sum_acceleration30),
+                'graph_transition_score': self._graph_values(self._graph_transition_score),
                 'graph_rate_b': np.empty(0, dtype=np.float64),
                 'graph_rate_r': np.empty(0, dtype=np.float64),
                 'graph_rate_g': np.empty(0, dtype=np.float64),
@@ -723,8 +691,8 @@ class CameraWorker:
                 'graph_rate_log_bg': np.empty(0, dtype=np.float64),
                 'graph_fastslow_log': np.empty(0, dtype=np.float64),
                 'graph_fastslow_log_bg': np.empty(0, dtype=np.float64),
-                'graph_tri_x': self._graph_tri_x[:self._graph_len],
-                'graph_tri_y': self._graph_tri_y[:self._graph_len],
+                'graph_tri_x': self._graph_values(self._graph_tri_x),
+                'graph_tri_y': self._graph_values(self._graph_tri_y),
                 'graph_version': self.graph_version,
                 'point_count': self._graph_len,
                 'frame_count': self.frame_count,

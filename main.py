@@ -22,6 +22,16 @@ if PROJECT_ROOT not in sys.path:
     sys.path.insert(0, PROJECT_ROOT)
 os.chdir(PROJECT_ROOT)
 
+
+def _pause_for_console():
+    """Pause only in an interactive terminal, never in a windowed EXE."""
+    try:
+        if sys.stdin is not None and sys.stdin.isatty():
+            input("Нажмите Enter для выхода...")
+    except (EOFError, OSError):
+        pass
+
+
 try:
     from src.utils.ffmpeg_utils import ensure_pyqt5_platform_plugin_path
     from src.gui.setup_app import SetupApp
@@ -29,7 +39,7 @@ except ImportError as e:
     print("Ошибка импорта модуля. Проверьте структуру проекта и установленные зависимости.")
     print(f"Детали: {e}")
     traceback.print_exc()
-    input("Нажмите Enter для выхода...")
+    _pause_for_console()
     sys.exit(1)
 
 if __name__ == "__main__":
@@ -43,5 +53,5 @@ if __name__ == "__main__":
         print("Критическая ошибка при запуске приложения:")
         print(f"{e}")
         traceback.print_exc()
-        input("Нажмите Enter для выхода...")
+        _pause_for_console()
         sys.exit(1)

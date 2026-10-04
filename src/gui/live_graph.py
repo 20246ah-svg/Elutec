@@ -5,6 +5,8 @@ from collections import deque
 import numpy as np
 
 from ..analysis.annotations import Annotation, AnnotationManager
+from .design_system import get_palette
+from ..utils.formulas import evaluate_formula, is_safe_variable_name
 from ..utils.math_utils import (
     adaptive_log_y_range, nice_y_axis_ticks, compute_window_rate,
     compute_window_mean, compute_window_median_before,
@@ -12,9 +14,7 @@ from ..utils.math_utils import (
 )
 from ..config import (
     RGB_Y_MIN, RGB_Y_MAX, LOG_Y_MARGIN_FRAC,
-    ELUTEK_LIGHT_BG, ELUTEK_200, ELUTEK_300, ELUTEK_BRAND,
-    ELUTEK_600, ELUTEK_INK, ELUTEK_VOID, ELUTEK_PANEL_DARK,
-    ELUTEK_CARD_DARK, ELUTEK_ACCENT, ELUTEK_SUCCESS, ELUTEK_DANGER,
+    ELUTEK_ACCENT, ELUTEK_SUCCESS,
     TRANSITION_ALERT_CONFIRM_MS, TRANSITION_ALERTS_ENABLED,
     TRANSITION_ARM_DELAY_MS, TRANSITION_ALERT_DISPLAY_MS,
     TRANSITION_MIN_RGB_SUM, TRANSITION_STATUS_SHOW_AFTER_MS,
@@ -161,17 +161,36 @@ class LiveGraphWindow:
         except Exception:
             pass
 
-        ctrl = QtWidgets.QHBoxLayout()
-        ctrl.setSpacing(8)
+        toolbar = QtWidgets.QFrame()
+        toolbar.setObjectName('graphToolbar')
+        ctrl = QtWidgets.QHBoxLayout(toolbar)
+        ctrl.setContentsMargins(10, 8, 10, 8)
+        ctrl.setSpacing(7)
+        self.toolbar_context = QtWidgets.QLabel('ВИДЕОФАЙЛ' if self.is_video_file else 'ЖИВАЯ СЕССИЯ')
+        self.toolbar_context.setObjectName('toolbarContext')
+        self.toolbar_context.setToolTip('Текущий режим получения данных')
+        ctrl.addWidget(self.toolbar_context)
+
+        divider = QtWidgets.QFrame()
+        divider.setObjectName('toolbarDivider')
+        divider.setFrameShape(QtWidgets.QFrame.VLine)
+        ctrl.addWidget(divider)
+
         self.btn_r = QtWidgets.QPushButton('R')
         self.btn_r.setCheckable(True)
         self.btn_r.setChecked(True)
+        self.btn_r.setProperty('role', 'channelRed')
+        self.btn_r.setToolTip('Показать или скрыть красный канал')
         self.btn_g = QtWidgets.QPushButton('G')
         self.btn_g.setCheckable(True)
         self.btn_g.setChecked(True)
+        self.btn_g.setProperty('role', 'channelGreen')
+        self.btn_g.setToolTip('Показать или скрыть зелёный канал')
         self.btn_b = QtWidgets.QPushButton('B')
         self.btn_b.setCheckable(True)
         self.btn_b.setChecked(True)
+        self.btn_b.setProperty('role', 'channelBlue')
+        self.btn_b.setToolTip('Показать или скрыть синий канал')
 
         self.unit_btn = QtWidgets.QPushButton('TIME · MS')
         self.unit_btn.setCheckable(False)
@@ -197,8 +216,11 @@ class LiveGraphWindow:
         self.stop_btn.setObjectName('dangerButton')
 
         self.pts_label = QtWidgets.QLabel('PTS:0')
+        self.pts_label.setObjectName('pointsLabel')
         self.pts_label.setMinimumWidth(90)
+        self.pts_label.setToolTip('Количество точек в текущей сессии')
         self.graphs_btn = QtWidgets.QPushButton('ГРАФИКИ · Сетка 2×N')
+        self.graphs_btn.setProperty('role', 'primary')
         self.graphs_btn.setToolTip('Выбор графиков и раскладки')
         self.graphs_btn.clicked.connect(self._open_graph_selector)
 
@@ -237,29 +259,29 @@ class LiveGraphWindow:
 
         ctrl.addStretch()
         self._apply_elutek_qss()
-        self.layout.addLayout(ctrl)
+        self.layout.addWidget(toolbar)
 
         # Real-time Cursor Coordinates HUD bar (Отображение координат X, Y при наведении мыши на графики)
         self.cursor_hud = QtWidgets.QFrame()
         self.cursor_hud.setObjectName('cursorHud')
         self.cursor_hud.setFixedHeight(28)
         self.cursor_hud.setSizePolicy(self.QtWidgets.QSizePolicy.Expanding, self.QtWidgets.QSizePolicy.Fixed)
-        self.cursor_hud.setStyleSheet(
-            "QFrame#cursorHud { background-color: rgba(17, 24, 39, 0.85); border: 1px solid #2A3451; border-radius: 6px; padding: 2px 10px; }"
-        )
         hud_layout = QtWidgets.QHBoxLayout(self.cursor_hud)
         hud_layout.setContentsMargins(6, 0, 6, 0)
         hud_layout.setSpacing(10)
 
-        self.cursor_hud_label = QtWidgets.QLabel("📍 Наведите курсор на любой график для отображения координат (X: Время, Y: Значение)")
-        self.cursor_hud_label.setStyleSheet("font-family: 'Consolas', 'Segoe UI', monospace; font-size: 11px; font-weight: bold; color: #38BDF8;")
+        self.cursor_hud_label = QtWidgets.QLabel("📍 Наведите курсор на график: X — время, Y — значение")
+        self.cursor_hud_label.setObjectName('cursorHudLabel')
         hud_layout.addWidget(self.cursor_hud_label)
         hud_layout.addStretch()
 
         self.layout.addWidget(self.cursor_hud)
 
         if self.is_video_file:
-            player_bar = QtWidgets.QHBoxLayout()
+            player_panel = QtWidgets.QFrame()
+            player_panel.setObjectName('playerBar')
+            player_bar = QtWidgets.QHBoxLayout(player_panel)
+            player_bar.setContentsMargins(10, 7, 10, 7)
             player_bar.setSpacing(8)
 
             self.player_play_btn = QtWidgets.QPushButton('⏸ ПАУЗА')
@@ -306,7 +328,7 @@ class LiveGraphWindow:
                       self.player_speed_label, self.player_speed_combo, self.player_slider, self.player_time_label]:
                 player_bar.addWidget(w)
 
-            self.layout.addLayout(player_bar)
+            self.layout.addWidget(player_panel)
 
         # Flexible graph workspace: selected graphs can be shown in any combination.
         self.graph_scroll = self.QtWidgets.QScrollArea()
@@ -1115,57 +1137,93 @@ class LiveGraphWindow:
 
                                         
     def _apply_elutek_qss(self):
+        """Apply the analysis-workspace visual hierarchy without touching data flow."""
         try:
             light = self.theme_mode == 'light'
-            bg = ELUTEK_LIGHT_BG if light else ELUTEK_INK
-            panel = '#FFFFFF' if light else ELUTEK_PANEL_DARK
-            fg = ELUTEK_INK if light else ELUTEK_200
-
-            btn_bg = '#FFFFFF' if light else ELUTEK_600
-            btn_fg = '#0E121B' if light else '#FFFFFF'
-            btn_border = '#CBD5E1' if light else ELUTEK_BRAND
-            btn_hover_bg = '#E2E8F0' if light else ELUTEK_BRAND
-            btn_hover_fg = '#0E121B' if light else '#FFFFFF'
-            btn_checked_bg = ELUTEK_BRAND if light else '#2563EB'
-            btn_checked_fg = '#FFFFFF'
-            btn_checked_border = '#1C2336' if light else '#3B82F6'
-
-            danger_bg = '#DC2626'
-            danger_border = '#B91C1C'
+            palette = get_palette(light)
+            bg = palette['background']
+            panel = palette['surface']
+            raised = palette['surface_raised']
+            hover = palette['surface_hover']
+            fg = palette['text']
+            muted = palette['muted']
+            border = palette['border']
+            accent = palette['accent']
+            accent_hover = palette['accent_hover']
 
             self.win.setStyleSheet(f"""
                 QMainWindow, QWidget#ElutekCentral {{ background: {bg}; color: {fg}; }}
-                QLabel {{ color: {fg}; font-family: Segoe UI, Arial; font-size: 10pt; }}
-                QPushButton {{ background: {btn_bg}; color: {btn_fg}; border: 1.5px solid {btn_border}; border-radius: 8px; padding: 6px 11px; font-family: Segoe UI, Arial; font-size: 9pt; font-weight: 700; letter-spacing: 0.3px; }}
-                QPushButton:hover {{ background: {btn_hover_bg}; color: {btn_hover_fg}; border-color: {ELUTEK_300}; }}
-                QPushButton:checked {{ background: {btn_checked_bg}; color: {btn_checked_fg}; border: 1.5px solid {btn_checked_border}; }}
-                QPushButton#dangerButton {{ background: {danger_bg}; color: #FFFFFF; border: 1.5px solid {danger_border}; font-weight: bold; }}
-                QPushButton#dangerButton:hover {{ background: #B91C1C; color: #FFFFFF; }}
-                QLabel#transitionAlert {{ background: rgba(185,74,85,245); color: #FFFFFF; border: 2px solid {ELUTEK_SUCCESS}; border-radius: 14px; padding: 12px 22px; font-size: 15pt; font-weight: 900; }}
+                QWidget {{ font-family: 'Segoe UI', Arial; font-size: 9pt; }}
+                QLabel {{ color: {fg}; }}
+                QToolTip {{ background: {raised}; color: {fg}; border: 1px solid {border}; padding: 5px; }}
+
+                QFrame#graphToolbar, QFrame#playerBar {{
+                    background: {panel}; border: 1px solid {border}; border-radius: 12px;
+                }}
+                QLabel#toolbarContext {{
+                    background: {palette['accent_soft']}; color: {accent}; border-radius: 7px;
+                    padding: 5px 8px; font-size: 8pt; font-weight: 800; letter-spacing: 0.5px;
+                }}
+                QLabel#pointsLabel {{
+                    background: {raised}; color: {muted}; border-radius: 7px;
+                    padding: 5px 8px; font-family: Consolas, 'Segoe UI', monospace; font-weight: 700;
+                }}
+                QFrame#toolbarDivider {{ background: {border}; max-width: 1px; min-width: 1px; margin: 4px 2px; }}
+
+                QPushButton {{
+                    background: {raised}; color: {fg}; border: 1px solid {border}; border-radius: 7px;
+                    padding: 6px 10px; min-height: 18px; font-family: 'Segoe UI', Arial;
+                    font-size: 9pt; font-weight: 700;
+                }}
+                QPushButton:hover {{ background: {hover}; border-color: {palette['border_focus']}; }}
+                QPushButton:focus {{ border: 2px solid {palette['border_focus']}; padding: 5px 9px; }}
+                QPushButton:checked {{ background: {accent}; color: #FFFFFF; border-color: {accent}; }}
+                QPushButton[role="primary"] {{ background: {accent}; color: #FFFFFF; border-color: {accent}; }}
+                QPushButton[role="primary"]:hover {{ background: {accent_hover}; border-color: {accent_hover}; }}
+                QPushButton[role="channelRed"]:checked {{ background: #DC2626; border-color: #F87171; }}
+                QPushButton[role="channelGreen"]:checked {{ background: #15803D; border-color: #4ADE80; }}
+                QPushButton[role="channelBlue"]:checked {{ background: #2563EB; border-color: #60A5FA; }}
+                QPushButton#dangerButton {{ background: #DC2626; color: #FFFFFF; border: 1px solid #F87171; font-weight: 800; }}
+                QPushButton#dangerButton:hover {{ background: #B91C1C; border-color: #FCA5A5; }}
+                QPushButton:disabled {{ background: {panel}; color: {muted}; border-color: {border}; }}
+
+                QFrame#cursorHud {{ background: {panel}; border: 1px solid {border}; border-radius: 9px; }}
+                QLabel#cursorHudLabel {{ color: {accent}; font-family: Consolas, 'Segoe UI', monospace; font-size: 10pt; font-weight: 700; }}
+                QSlider::groove:horizontal {{ height: 5px; background: {border}; border-radius: 2px; }}
+                QSlider::sub-page:horizontal {{ background: {accent}; border-radius: 2px; }}
+                QSlider::handle:horizontal {{ background: {fg}; width: 14px; margin: -5px 0; border-radius: 7px; border: 2px solid {accent}; }}
+
+                QLabel#transitionAlert {{ background: rgba(185,74,85,245); color: #FFFFFF; border: 2px solid {ELUTEK_SUCCESS}; border-radius: 12px; padding: 12px 22px; font-size: 14pt; font-weight: 900; }}
                 QLabel#transitionAlert:hover {{ background: rgba(220,50,65,255); border: 2px solid #FFFFFF; }}
-                QFrame#transitionStatusPanel {{ background: {panel}; border: 1px solid {ELUTEK_BRAND if light else '#374151'}; border-radius: 12px; }}
-                QLabel#transitionStatusHeader {{ color: {'#111111' if light else '#FFFFFF'}; font-weight: 900; }}
-                QLabel#transitionStatusLine {{ color: {fg}; font-weight: 650; }}
-                QLabel#transitionStatusLine[state="active"] {{ color: {'#111111' if light else '#FFFFFF'}; font-weight: 800; }}
-                QLabel#transitionStatusLine[state="done"] {{ color: {ELUTEK_SUCCESS}; font-weight: 750; }}
-                QLabel#transitionStatusDetail {{ color: {ELUTEK_BRAND if light else ELUTEK_ACCENT}; border-top: 1px solid {ELUTEK_BRAND if light else '#374151'}; padding-top: 5px; font-family: Consolas, Segoe UI, Arial; }}
-                QWidget {{ font-family: 'Segoe UI'; font-size: 9pt; }}
-                QMainWindow, QDialog, QScrollArea, QAbstractScrollArea, QScrollArea > QWidget, QScrollArea QWidget#qt_scrollarea_viewport, QWidget#graphHost {{ background: {bg}; color: {fg}; }}
+                QFrame#transitionStatusPanel {{ background: {panel}; border: 1px solid {border}; border-radius: 12px; }}
+                QLabel#transitionStatusHeader {{ color: {accent}; font-size: 9pt; font-weight: 900; letter-spacing: 0.6px; }}
+                QLabel#transitionStatusLine {{ color: {muted}; font-weight: 650; }}
+                QLabel#transitionStatusLine[state="active"] {{ color: {fg}; font-weight: 800; }}
+                QLabel#transitionStatusLine[state="done"] {{ color: {palette['success']}; font-weight: 750; }}
+                QLabel#transitionStatusDetail {{ color: {muted}; border-top: 1px solid {border}; padding-top: 5px; font-family: Consolas, 'Segoe UI', Arial; }}
+
+                QMainWindow, QDialog, QScrollArea, QAbstractScrollArea, QScrollArea > QWidget,
+                QScrollArea QWidget#qt_scrollarea_viewport, QWidget#graphHost {{ background: {bg}; color: {fg}; }}
                 QScrollArea#graphScroll {{ background: {bg}; border: none; }}
                 QDialog {{ background: {bg}; color: {fg}; }}
                 QDialog QLabel, QGroupBox, QRadioButton, QListWidget, QListWidget::item {{ color: {fg}; }}
-                QGroupBox {{ border: 1px solid {ELUTEK_200}; border-radius: 6px; margin-top: 8px; padding-top: 8px; }}
-                QGroupBox::title {{ color: {fg}; subcontrol-origin: margin; left: 8px; padding: 0 4px; }}
-                QLineEdit, QTextEdit, QListWidget, QComboBox, QSpinBox, QDoubleSpinBox {{ background: {panel}; color: {fg}; border: 1px solid {ELUTEK_200}; border-radius: 6px; padding: 5px; selection-background-color: {ELUTEK_BRAND}; selection-color: #FFFFFF; }}
-                QListWidget {{ alternate-background-color: {panel}; }}
-                QScrollBar:vertical {{ background: {panel}; width: 8px; margin: 0px; border: none; border-radius: 4px; }}
-                QScrollBar::handle:vertical {{ background: {ELUTEK_300}; border-radius: 4px; min-height: 25px; }}
-                QScrollBar::handle:vertical:hover {{ background: {ELUTEK_BRAND if light else '#60A5FA'}; }}
-                QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical {{ height: 0px; background: none; }}
+                QGroupBox {{ border: 1px solid {border}; border-radius: 8px; margin-top: 9px; padding: 10px 8px 6px; background: {panel}; }}
+                QGroupBox::title {{ color: {accent}; subcontrol-origin: margin; left: 9px; padding: 0 5px; font-weight: 700; }}
+                QLineEdit, QTextEdit, QListWidget, QComboBox, QSpinBox, QDoubleSpinBox {{
+                    background: {panel}; color: {fg}; border: 1px solid {border}; border-radius: 6px;
+                    padding: 5px; selection-background-color: {accent}; selection-color: #FFFFFF;
+                }}
+                QLineEdit:focus, QTextEdit:focus, QListWidget:focus, QComboBox:focus {{ border-color: {palette['border_focus']}; }}
+                QListWidget {{ alternate-background-color: {raised}; }}
+                QScrollBar:vertical {{ background: {panel}; width: 9px; margin: 0; border: none; border-radius: 4px; }}
+                QScrollBar::handle:vertical {{ background: {border}; border-radius: 4px; min-height: 28px; }}
+                QScrollBar::handle:vertical:hover {{ background: {accent}; }}
+                QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical {{ height: 0; background: none; }}
                 QScrollBar::add-page:vertical, QScrollBar::sub-page:vertical {{ background: none; }}
-                QScrollBar:horizontal {{ background: {panel}; height: 8px; margin: 0px; border: none; border-radius: 4px; }}
-                QScrollBar::handle:horizontal {{ background: {ELUTEK_300}; border-radius: 4px; min-width: 25px; }}
-                QScrollBar::add-line:horizontal, QScrollBar::sub-line:horizontal {{ width: 0px; background: none; }}
+                QScrollBar:horizontal {{ background: {panel}; height: 9px; margin: 0; border: none; border-radius: 4px; }}
+                QScrollBar::handle:horizontal {{ background: {border}; border-radius: 4px; min-width: 28px; }}
+                QScrollBar::handle:horizontal:hover {{ background: {accent}; }}
+                QScrollBar::add-line:horizontal, QScrollBar::sub-line:horizontal {{ width: 0; background: none; }}
                 QScrollBar::add-page:horizontal, QScrollBar::sub-page:horizontal {{ background: none; }}
             """)
         except Exception:
@@ -1262,24 +1320,22 @@ class LiveGraphWindow:
             'log_ratio_speed30': np.asarray(getattr(self, '_cached_log_ratio_speed30', []), dtype=np.float64),
             'rgb_sum_acceleration30': np.asarray(getattr(self, '_cached_rgb_sum_acceleration30', []), dtype=np.float64),
         }
-        safe_builtins = {'abs': abs, 'min': min, 'max': max, 'round': round, 'float': float, 'int': int}
-
         # Evaluate custom variables first (Option 2)
         cfg = getattr(self, 'notification_settings', {}) or {}
         custom_vars = cfg.get('custom_variables', []) if isinstance(cfg, dict) else []
         for cv in custom_vars:
             v_name = str(cv.get('name', '')).strip()
             v_formula = str(cv.get('formula', '')).strip()
-            if v_name and v_formula and v_name.isidentifier():
+            if v_name and v_formula and is_safe_variable_name(v_name, set(env)):
                 try:
-                    v_val = eval(v_formula, {'__builtins__': safe_builtins}, env)
+                    v_val = evaluate_formula(v_formula, env)
                     env[v_name] = np.asarray(v_val, dtype=np.float64)
-                except Exception:
+                except (ValueError, TypeError):
                     pass
 
         for item in self.custom_graphs:
             try:
-                value = eval(item['formula'], {'__builtins__': safe_builtins}, env)
+                value = evaluate_formula(item['formula'], env)
                 arr = np.asarray(value, dtype=np.float64)
                 if arr.ndim == 0:
                     arr = np.full(len(x_display), float(arr), dtype=np.float64)
@@ -1293,15 +1349,15 @@ class LiveGraphWindow:
                 item['curve'].setData(x_display, arr, downsample=max(1, len(arr)//4000))
             except Exception:
                 item['curve'].setData([], [])
-                item['curve'].setData([], [])
 
     def _apply_theme(self):
         self._apply_elutek_qss()
         is_light = (self.theme_mode == 'light')
-        bg = ELUTEK_LIGHT_BG if is_light else ELUTEK_INK
-        axis_color = "#64748B" if is_light else ELUTEK_200
-        text_color = "#0E121B" if is_light else "#E2E8F0"
-        title_color = "#0E121B" if is_light else "#93C5FD"
+        palette = get_palette(is_light)
+        bg = palette['background']
+        axis_color = palette['muted']
+        text_color = palette['text']
+        title_color = palette['text'] if is_light else '#93C5FD'
         grid_alpha = 0.16 if is_light else 0.22
 
         axis_pen = self.pg.mkPen(axis_color, width=1.2)
@@ -1962,21 +2018,19 @@ class LiveGraphWindow:
             'log_br': log_br_val,
             'log_bg': log_bg_val,
         }
-        safe_builtins = {'abs': abs, 'min': min, 'max': max, 'round': round, 'float': float, 'int': int}
-
         # 1. Evaluate custom variables
         cfg = getattr(self, 'notification_settings', {}) or {}
         custom_vars = cfg.get('custom_variables', []) if isinstance(cfg, dict) else []
         for cv in custom_vars:
             v_name = str(cv.get('name', '')).strip()
             v_formula = str(cv.get('formula', '')).strip()
-            if v_name and v_formula and v_name.isidentifier():
+            if v_name and v_formula and is_safe_variable_name(v_name, set(env)):
                 try:
-                    v_val = eval(v_formula, {'__builtins__': safe_builtins}, env)
+                    v_val = evaluate_formula(v_formula, env)
                     f_val = float(v_val)
                     env[v_name] = f_val
                     values[v_name] = f_val
-                except Exception:
+                except (ValueError, TypeError):
                     pass
 
         # 2. Evaluate custom graphs
@@ -1986,7 +2040,7 @@ class LiveGraphWindow:
             cg_formula = str(cg.get('formula', '')).strip()
             if cg_name and cg_formula:
                 try:
-                    cg_val = eval(cg_formula, {'__builtins__': safe_builtins}, env)
+                    cg_val = evaluate_formula(cg_formula, env)
                     f_val = float(cg_val)
                     values[cg_name] = f_val
                     if cg_name.isidentifier():

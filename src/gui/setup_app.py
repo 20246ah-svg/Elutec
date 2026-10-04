@@ -1,6 +1,11 @@
 import json
-import tkinter as tk
-from tkinter import ttk, messagebox, filedialog
+try:
+    import tkinter as tk
+    from tkinter import ttk, messagebox, filedialog
+    _TK_IMPORT_ERROR = None
+except ImportError as exc:
+    tk = ttk = messagebox = filedialog = None
+    _TK_IMPORT_ERROR = exc
 from .settings_window import SettingsWindow, load_saved_settings
 import cv2
 import numpy as np
@@ -8,7 +13,11 @@ import time
 import os
 import socket
 import threading
-from PIL import Image, ImageTk, ImageDraw, ImageFont
+from PIL import Image, ImageDraw, ImageFont
+try:
+    from PIL import ImageTk
+except ImportError:
+    ImageTk = None
 from collections import deque
 from ..utils.math_utils import compute_log_br
 
@@ -21,12 +30,12 @@ from ..utils.helpers import (
 )
 from ..utils.ffmpeg_utils import ensure_pyqt5_platform_plugin_path
 from ..analysis.runner import run_analysis
-from ..config import ELUTEK_LIGHT_BG, ELUTEK_200, ELUTEK_300, ELUTEK_BRAND, ELUTEK_600, ELUTEK_INK, ELUTEK_ACCENT, ELUTEK_PANEL_DARK
 from ..utils.license_manager import (
     LicenseManager, LICENSE_STATUS_LICENSED,
     LICENSE_STATUS_TRIAL_ACTIVE, LICENSE_STATUS_TRIAL_EXPIRED
 )
 from .license_dialog import LicenseDialog
+from .design_system import apply_ttk_theme, get_palette
 
 
 def _get_unicode_font(size=14, bold=False):
@@ -119,6 +128,10 @@ class PreviewWorker:
 
 class SetupApp:
     def __init__(self):
+        if tk is None or ImageTk is None:
+            raise RuntimeError(
+                "Tkinter недоступен. Установите компонент Python Tk/Tcl для запуска интерфейса."
+            ) from _TK_IMPORT_ERROR
         self.root = tk.Tk()
         self.root.title("Элютек")
         self.root.geometry("1600x860")
@@ -218,124 +231,52 @@ class SetupApp:
         self.root.mainloop()
 
     def _apply_start_theme(self):
+        """Apply the shared theme and finish styling native Tk widgets."""
         style = ttk.Style(self.root)
         light = bool(self.config.get('light_theme', False))
-        if light:
-            bg, panel, fg, border, button = ELUTEK_LIGHT_BG, '#FFFFFF', ELUTEK_INK, ELUTEK_200, ELUTEK_BRAND
-        else:
-            bg, panel, fg, border, button = ELUTEK_INK, ELUTEK_PANEL_DARK if 'ELUTEK_PANEL_DARK' in globals() else '#111827', '#FFFFFF', ELUTEK_BRAND, ELUTEK_600
-        self.root.configure(bg=bg)
-        style.configure('.', font=('Segoe UI', 10), background=bg, foreground=fg)
-        style.configure('TFrame', background=bg)
-        style.configure('TLabel', background=bg, foreground=fg)
-        style.configure('TLabelframe', background=bg, foreground=ELUTEK_ACCENT, bordercolor=border, relief='flat')
-        style.configure('TLabelframe.Label', background=bg, foreground=ELUTEK_ACCENT, font=('Segoe UI', 10, 'bold'))
-        style.configure('TButton', background=button, foreground=('white' if not light else 'white'), borderwidth=0, focusthickness=0, padding=(10, 6))
-        style.map('TButton', background=[('active', ELUTEK_300 if light else ELUTEK_BRAND), ('pressed', ELUTEK_600)], foreground=[('disabled', ELUTEK_300)])
-        style.configure(
-            'TEntry',
-            fieldbackground=panel, foreground=fg,
-            bordercolor=border, lightcolor=border, darkcolor=border
-        )
+        palette = apply_ttk_theme(style, light)
+        self.root.configure(bg=palette['background'])
 
-        # Explicit maps are important with the Windows/clam ttk theme:
-        # without them hover/readonly states can fall back to white.
-        style.configure(
-            'TCombobox',
-            fieldbackground=panel,
-            background=panel,
-            foreground=fg,
-            arrowcolor=ELUTEK_ACCENT,
-            bordercolor=border,
-            lightcolor=border,
-            darkcolor=border
-        )
-        style.map(
-            'TCombobox',
-            fieldbackground=[
-                ('readonly', panel),
-                ('focus', panel),
-                ('active', panel),
-            ],
-            foreground=[
-                ('readonly', fg),
-                ('focus', fg),
-                ('active', fg),
-            ],
-            background=[
-                ('readonly', panel),
-                ('focus', panel),
-                ('active', panel),
-            ],
-            arrowcolor=[
-                ('readonly', ELUTEK_ACCENT),
-                ('focus', ELUTEK_ACCENT),
-                ('active', ELUTEK_ACCENT),
-            ]
-        )
-
-        style.configure('TRadiobutton', background=bg, foreground=fg)
-        style.map(
-            'TRadiobutton',
-            background=[
-                ('active', bg),
-                ('pressed', bg),
-                ('focus', bg),
-            ],
-            foreground=[
-                ('active', fg),
-                ('pressed', fg),
-                ('focus', fg),
-            ]
-        )
-
-        style.configure('TCheckbutton', background=bg, foreground=fg)
-        style.map(
-            'TCheckbutton',
-            background=[
-                ('active', bg),
-                ('pressed', bg),
-                ('focus', bg),
-            ],
-            foreground=[
-                ('active', fg),
-                ('pressed', fg),
-                ('focus', fg),
-            ]
-        )
-        style.configure('TNotebook', background=bg, borderwidth=0)
-        style.configure('TNotebook.Tab', background=panel, foreground=fg, padding=(10, 6))
-        style.map('TNotebook.Tab', background=[('selected', ELUTEK_BRAND if light else ELUTEK_600)], foreground=[('selected', '#FFFFFF')])
-        # Tk-native widgets need their own colors.
+        # Canvas and Listbox do not consume ttk styles.  Keeping this here also
+        # makes a live theme switch update already-created native widgets.
         for widget_name in ('devices_listbox', 'preview_rgb_canvas', 'left_canvas'):
             widget = getattr(self, widget_name, None)
             if widget is not None:
                 try:
-                    widget.configure(bg=panel, fg=fg, selectbackground=ELUTEK_BRAND, selectforeground='white')
+                    widget.configure(
+                        bg=palette['surface'], fg=palette['text'],
+                        selectbackground=palette['selection'], selectforeground='#FFFFFF',
+                    )
                 except Exception:
                     try:
-                        widget.configure(bg=panel)
+                        widget.configure(bg=palette['surface'])
                     except Exception:
                         pass
         if hasattr(self, 'preview_rgb_canvas'):
             try:
                 self.preview_rgb_canvas.configure(
-                    bg=panel,
-                    highlightbackground=(ELUTEK_200 if light else ELUTEK_BRAND)
+                    bg=palette['surface'], highlightbackground=palette['border']
+                )
+            except Exception:
+                pass
+        if hasattr(self, 'preview_color_canvas'):
+            try:
+                self.preview_color_canvas.configure(
+                    bg=palette['surface_raised'], highlightbackground=palette['border']
                 )
             except Exception:
                 pass
         if hasattr(self, 'preview_label'):
-            self.preview_label.configure(background=panel)
+            self.preview_label.configure(background=palette['surface'])
         if hasattr(self, 'left_canvas'):
             try:
-                self.left_canvas.configure(bg=bg)
+                self.left_canvas.configure(bg=palette['background'])
             except Exception:
                 pass
         if hasattr(self, 'theme_btn'):
             try:
                 self.theme_btn.config(
-                    text="☀️ Светлая тема" if not self.config.get('light_theme', False) else "🌙 Тёмная тема"
+                    text="☀️ Светлая тема" if not light else "🌙 Тёмная тема"
                 )
             except Exception:
                 pass
@@ -388,37 +329,46 @@ class SetupApp:
         except Exception:
             pass
 
-        header = ttk.Frame(self.root)
-        header.pack(fill="x", padx=10, pady=10)
-        title_row = ttk.Frame(header)
+        header = ttk.Frame(self.root, style="Header.TFrame")
+        header.pack(fill="x", padx=18, pady=(16, 10))
+        title_row = ttk.Frame(header, style="Header.TFrame")
         title_row.pack(fill='x')
-        ttk.Label(title_row, text="RGB SARA анализ",
-                 font=('Arial', 16, 'bold')).pack(side='left')
-        ttk.Button(title_row, text="⚙ Настройки",
+
+        brand = ttk.Frame(title_row, style="Header.TFrame")
+        brand.pack(side='left', fill='x', expand=True)
+        ttk.Label(brand, text="ELUTEK · VISUAL ANALYTICS", style="Eyebrow.TLabel").pack(anchor='w')
+        ttk.Label(brand, text="RGB SARA — анализ", style="Title.TLabel").pack(anchor='w', pady=(1, 0))
+        ttk.Label(
+            brand, text="Подключите источник, настройте область и запустите измерение.",
+            style="Subtitle.TLabel"
+        ).pack(anchor='w', pady=(1, 0))
+
+        actions = ttk.Frame(title_row, style="Header.TFrame")
+        actions.pack(side='right', anchor='n', pady=(4, 0))
+        ttk.Button(actions, text="⚙ Настройки", style="Primary.TButton",
                    command=self.open_settings).pack(side='right')
         self.lic_btn = ttk.Button(
-            title_row,
-            text="🔑 Лицензия",
+            actions, text="🔑 Лицензия", style="Compact.TButton",
             command=self.open_license_dialog
         )
         self.lic_btn.pack(side='right', padx=(0, 8))
         self.theme_btn = ttk.Button(
-            title_row,
+            actions,
             text="☀️ Светлая тема" if not self.config.get('light_theme', False) else "🌙 Тёмная тема",
-            command=self.toggle_theme
+            style="Compact.TButton", command=self.toggle_theme
         )
         self.theme_btn.pack(side='right', padx=(0, 8))
         self._update_license_ui()
 
         main = ttk.Frame(self.root)
-        main.pack(fill="both", expand=True, padx=10, pady=5)
+        main.pack(fill="both", expand=True, padx=18, pady=(0, 16))
 
                                    
-        left_outer = ttk.Frame(main, width=380)
-        left_outer.pack(side="left", fill="y", padx=5)
+        left_outer = ttk.Frame(main, width=400)
+        left_outer.pack(side="left", fill="y", padx=(0, 12))
         left_outer.pack_propagate(False)
 
-        left_canvas = tk.Canvas(left_outer, highlightthickness=0)
+        left_canvas = tk.Canvas(left_outer, highlightthickness=0, bg=self.root.cget('bg'))
         self.left_canvas = left_canvas
         left_scrollbar = ttk.Scrollbar(left_outer, orient="vertical", command=left_canvas.yview)
         left_canvas.configure(yscrollcommand=left_scrollbar.set)
@@ -443,10 +393,10 @@ class SetupApp:
         left_canvas.bind("<Leave>", lambda event: left_canvas.unbind_all("<MouseWheel>"))
 
                                               
-        frame_scan = ttk.LabelFrame(left, text="📹 Доступные устройства")
+        frame_scan = ttk.LabelFrame(left, text="01 · ИСТОЧНИК ВИДЕО", style="Card.TLabelframe")
         frame_scan.pack(fill="x", pady=5)
 
-        btn_frame = ttk.Frame(frame_scan)
+        btn_frame = ttk.Frame(frame_scan, style="Card.TFrame")
         btn_frame.pack(fill="x", padx=5, pady=5)
 
         ttk.Button(btn_frame, text="💡 RGB-детектор (MiiCam)", 
@@ -456,7 +406,7 @@ class SetupApp:
         ttk.Button(btn_frame, text="📱 IP-камеры (сеть)", 
                   command=self.scan_network_cameras).pack(fill="x", pady=2)
 
-        devices_box_frame = ttk.Frame(frame_scan)
+        devices_box_frame = ttk.Frame(frame_scan, style="Card.TFrame")
         devices_box_frame.pack(fill="both", padx=5, pady=5, expand=True)
         self.devices_listbox = tk.Listbox(devices_box_frame, height=6, width=48, activestyle='none')
         self.devices_listbox.pack(side="left", fill="both", expand=True)
@@ -466,35 +416,35 @@ class SetupApp:
         self.devices_listbox.bind('<<ListboxSelect>>', self.on_device_select)
         self.devices_listbox.bind('<Double-Button-1>', self.on_device_activate)
 
-        self.devices_label = ttk.Label(frame_scan, text="Выбранное устройство: —", wraplength=320)
+        self.devices_label = ttk.Label(frame_scan, text="Выбранное устройство: —", wraplength=342, style="CardMuted.TLabel")
         self.devices_label.pack(fill="x", padx=5, pady=(0,5))
 
                         
-        frame_cam = ttk.LabelFrame(left, text="📹 Источник видео")
+        frame_cam = ttk.LabelFrame(left, text="02 · ПОДКЛЮЧЕНИЕ", style="Card.TLabelframe")
         frame_cam.pack(fill="x", pady=5)
 
-        cam_inner = ttk.Frame(frame_cam)
+        cam_inner = ttk.Frame(frame_cam, style="Card.TFrame")
         cam_inner.pack(fill="x", padx=5, pady=5)
-        ttk.Label(cam_inner, text="URL/индекс: ").pack(side="left", padx=5)
+        ttk.Label(cam_inner, text="URL / индекс:", style="Card.TLabel").pack(side="left", padx=5)
         self.entry_source = ttk.Entry(cam_inner, width=28)
         self.entry_source.insert(0, self.config['source'])
         self.entry_source.pack(side="left", padx=5, fill="x", expand=True)
 
-        apply_frame = ttk.Frame(frame_cam)
+        apply_frame = ttk.Frame(frame_cam, style="Card.TFrame")
         apply_frame.pack(fill="x", padx=5, pady=(4, 6))
-        ttk.Button(apply_frame, text="✅ Применить", command=self.apply_source).pack(side="left", fill="x", expand=True, padx=(0, 2))
+        ttk.Button(apply_frame, text="✅ Применить", style="Primary.TButton", command=self.apply_source).pack(side="left", fill="x", expand=True, padx=(0, 2))
         ttk.Button(apply_frame, text="🔄 Переподключить", command=self.check_camera).pack(side="right", fill="x", expand=True, padx=(2, 0))
 
                      
-        frame_file = ttk.LabelFrame(left, text="🎞 Анализ видеофайла")
+        frame_file = ttk.LabelFrame(left, text="АЛЬТЕРНАТИВА · ВИДЕОФАЙЛ", style="Card.TLabelframe")
         frame_file.pack(fill="x", pady=5)
-        ttk.Label(frame_file, text="Выберите локальный видеофайл — откроется отдельный режим анализа.", wraplength=330).pack(fill="x", padx=8, pady=(7, 5))
+        ttk.Label(frame_file, text="Выберите локальный файл — он откроется в отдельном режиме анализа.", wraplength=342, style="CardMuted.TLabel").pack(fill="x", padx=10, pady=(8, 6))
         ttk.Button(frame_file, text="🎞 АНАЛИЗ ВИДЕОФАЙЛА", command=self.choose_video_file_and_analyze).pack(fill="x", padx=8, pady=(0, 8))
 
-        frame_save = ttk.LabelFrame(left, text="💾 Папка для сохранения результатов (Excel и Видео)")
+        frame_save = ttk.LabelFrame(left, text="03 · СОХРАНЕНИЕ РЕЗУЛЬТАТОВ", style="Card.TLabelframe")
         frame_save.pack(fill="x", pady=5)
 
-        save_inner = ttk.Frame(frame_save)
+        save_inner = ttk.Frame(frame_save, style="Card.TFrame")
         save_inner.pack(fill="x", padx=5, pady=5)
         self.entry_save_folder = ttk.Entry(save_inner, width=35)
         self.entry_save_folder.insert(0, self.config['save_folder'])
@@ -503,7 +453,7 @@ class SetupApp:
                   command=self.choose_save_folder).pack(side="left", padx=5)
 
              
-        frame_roi = ttk.LabelFrame(left, text="📐 Область анализа (ROI)")
+        frame_roi = ttk.LabelFrame(left, text="04 · ОБЛАСТЬ АНАЛИЗА (ROI)", style="Card.TLabelframe")
         frame_roi.pack(fill="x", pady=5)
 
         self.var_x = tk.IntVar(value=300)
@@ -512,20 +462,20 @@ class SetupApp:
         self.var_h = tk.IntVar(value=200)
         self.roi_shape_var = tk.StringVar(value=str(self.config.get('roi_shape', 'circle')))
 
-        shape_frame = ttk.Frame(frame_roi)
+        shape_frame = ttk.Frame(frame_roi, style="Card.TFrame")
         shape_frame.pack(fill="x", padx=5, pady=(0,5))
-        ttk.Label(shape_frame, text="Форма:").pack(side="left", padx=(0,5))
-        ttk.Radiobutton(shape_frame, text="Круг", variable=self.roi_shape_var, value='circle').pack(side="left", padx=2)
-        ttk.Radiobutton(shape_frame, text="Квадрат", variable=self.roi_shape_var, value='rect').pack(side="left", padx=2)
+        ttk.Label(shape_frame, text="Форма:", style="Card.TLabel").pack(side="left", padx=(0,5))
+        ttk.Radiobutton(shape_frame, text="Круг", style="Card.TRadiobutton", variable=self.roi_shape_var, value='circle').pack(side="left", padx=2)
+        ttk.Radiobutton(shape_frame, text="Квадрат", style="Card.TRadiobutton", variable=self.roi_shape_var, value='rect').pack(side="left", padx=2)
 
-        self.coord_label = ttk.Label(frame_roi, text="📍 X: 0  Y: 0  W: 0  H: 0", font=('Arial', 9))
+        self.coord_label = ttk.Label(frame_roi, text="📍 X: 0  Y: 0  W: 0  H: 0", style="CardMuted.TLabel")
         self.coord_label.pack(fill="x", padx=5, pady=2)
 
         vcmd = self.root.register(self.validate_roi_entry)
         def create_spin_row(parent, label_text, var, min_val=0, max_val=1920):
-            row = ttk.Frame(parent)
+            row = ttk.Frame(parent, style="Card.TFrame")
             row.pack(fill="x", padx=5, pady=2)
-            ttk.Label(row, text=f"{label_text}:", width=10).pack(side="left", padx=(0,5))
+            ttk.Label(row, text=f"{label_text}:", width=10, style="Card.TLabel").pack(side="left", padx=(0,5))
             btn_minus = ttk.Button(row, text="−", width=3, 
                                   command=lambda: self.adjust_value(var, -1, min_val, max_val))
             btn_minus.pack(side="left", padx=1)
@@ -542,7 +492,7 @@ class SetupApp:
         create_spin_row(frame_roi, "Ширина", self.var_w, 20, 1920)
         create_spin_row(frame_roi, "Высота", self.var_h, 20, 1080)
 
-        size_btn_frame = ttk.Frame(frame_roi)
+        size_btn_frame = ttk.Frame(frame_roi, style="Card.TFrame")
         size_btn_frame.pack(fill="x", padx=5, pady=3)
         ttk.Button(size_btn_frame, text="⬆ Увеличить", command=lambda: self.change_roi_size(1.2)).pack(side="left", padx=2)
         ttk.Button(size_btn_frame, text="⬇ Уменьшить", command=lambda: self.change_roi_size(0.8)).pack(side="left", padx=2)
@@ -553,40 +503,41 @@ class SetupApp:
 
                                
         frame_btn = ttk.Frame(left)
-        frame_btn.pack(fill="x", pady=10)
-        ttk.Button(frame_btn, text="▶ ЗАПУСТИТЬ АНАЛИЗ", 
-                  command=self.start_analysis).pack(fill="x", pady=5)
-        ttk.Button(frame_btn, text="🚪 ВЫХОД", 
-                  command=self.on_closing).pack(fill="x", pady=2)
+        frame_btn.pack(fill="x", pady=(12, 4))
+        ttk.Label(frame_btn, text="ГОТОВЫ К ИЗМЕРЕНИЮ?", style="Eyebrow.TLabel").pack(anchor="w", pady=(0, 5))
+        ttk.Button(frame_btn, text="▶ ЗАПУСТИТЬ АНАЛИЗ", style="Primary.TButton",
+                  command=self.start_analysis).pack(fill="x", pady=(0, 6))
+        ttk.Button(frame_btn, text="Выйти из программы", style="Danger.TButton",
+                  command=self.on_closing).pack(fill="x")
 
                                                    
         right = ttk.Frame(main)
-        right.pack(side="right", fill="both", expand=True, padx=5)
+        right.pack(side="right", fill="both", expand=True)
 
-        frame_rgb = ttk.LabelFrame(right, text="📊 RGB предпросмотр ROI")
+        frame_rgb = ttk.LabelFrame(right, text="СИГНАЛ · RGB В ОБЛАСТИ ROI", style="Card.TLabelframe")
         frame_rgb.pack(side="top", fill="x", pady=(0, 6))
 
-        rgb_info = ttk.Frame(frame_rgb)
+        rgb_info = ttk.Frame(frame_rgb, style="Card.TFrame")
         rgb_info.pack(fill="x", padx=6, pady=(5, 2))
-        ttk.Label(rgb_info, textvariable=self.preview_rgb_var, font=('Consolas', 11, 'bold')).pack(side="left", padx=(0, 12))
-        ttk.Label(rgb_info, textvariable=self.preview_log_var, font=('Consolas', 10)).pack(side="left", padx=(0, 12))
+        ttk.Label(rgb_info, textvariable=self.preview_rgb_var, style="Card.TLabel", font=('Consolas', 11, 'bold')).pack(side="left", padx=(0, 12))
+        ttk.Label(rgb_info, textvariable=self.preview_log_var, style="CardMuted.TLabel", font=('Consolas', 10)).pack(side="left", padx=(0, 12))
 
-        rgb_controls = ttk.Frame(frame_rgb)
+        rgb_controls = ttk.Frame(frame_rgb, style="Card.TFrame")
         rgb_controls.pack(fill="x", padx=6, pady=(0, 4))
         self.preview_color_canvas = tk.Canvas(rgb_controls, width=60, height=28, highlightthickness=1, highlightbackground="#777777")
         self.preview_color_canvas.pack(side="left", padx=(0, 8))
-        ttk.Label(rgb_controls, text="Шкала RGB: 0–300, последние ~300 точек", font=('Arial', 9)).pack(side="left", padx=10)
+        ttk.Label(rgb_controls, text="Шкала 0–300 · последние ~300 измерений", style="CardMuted.TLabel").pack(side="left", padx=10)
 
-        light = bool(self.config.get('light_theme', False))
-        canvas_bg = '#FFFFFF' if light else ELUTEK_PANEL_DARK
-        canvas_border = '#aaaaaa' if light else '#2A3451'
+        palette = get_palette(bool(self.config.get('light_theme', False)))
+        canvas_bg = palette['surface']
+        canvas_border = palette['border']
         self.preview_rgb_canvas = tk.Canvas(
             frame_rgb, height=95, bg=canvas_bg,
             highlightthickness=1, highlightbackground=canvas_border
         )
         self.preview_rgb_canvas.pack(fill="x", padx=6, pady=(0, 6))
 
-        frame_prev = ttk.LabelFrame(right, text="👁️ Предпросмотр")
+        frame_prev = ttk.LabelFrame(right, text="ПРЕДПРОСМОТР · РАМКА ROI ПЕРЕТАСКИВАЕТСЯ МЫШЬЮ", style="Card.TLabelframe")
         frame_prev.pack(side="top", fill="both", expand=True)
         self.preview_label = ttk.Label(frame_prev)
         self.preview_label.pack(fill="both", expand=True, padx=5, pady=5)

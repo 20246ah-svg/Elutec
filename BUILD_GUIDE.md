@@ -8,9 +8,10 @@
 
 1. Запустите файл **`make_release.bat`** двойным кликом на компьютере с Windows.
 2. Скрипт автоматически:
-   - Проверит и установит необходимые библиотеки (`pyinstaller`, `pillow`, `opencv-python`, `pyqtgraph`, `pyqt5`).
-   - Соберёт автономный исполняемый файл **`Elutek_SARA.exe`** в папку `dist/`.
-   - Если на компьютере установлен **Inno Setup 6**, скомпилирует красивый установочный пакет **`Elutek_Setup_v1.0.exe`** в папку `installer_output/`.
+   - Установит зависимости из `requirements-build.txt` (включая `PyInstaller`).
+   - Соберёт автономное приложение **`Elutek.exe`** в папку `dist/Elutek/`.
+   - Включит драйвер `miicam.dll`, если он присутствует в корне проекта.
+   - Если на компьютере установлен **Inno Setup 6**, скомпилирует установщик **`Elutek_Setup_v12.0.exe`** в папку `installer_output/`.
 
 ---
 
@@ -18,15 +19,16 @@
 
 В командной строке выполните:
 ```bash
+python -m pip install -r requirements-build.txt
 python build_exe.py
 ```
-После завершения в папке `dist/` появится файл `Elutek_SARA.exe`.
+После завершения в папке `dist/Elutek/` появится файл `Elutek.exe`.
 
 ---
 
 ## 📦 Способ 3: Сборка инсталлятора через Inno Setup
 
 1. Установите бесплатную программу [Inno Setup 6](https://jrsoftware.org/isdl.php).
-2. Сначала соберите EXE файл (`python build_exe.py`).
+2. Сначала соберите EXE файл, выполнив команды из способа 2.
 3. Откройте файл **`build_installer.iss`** в Inno Setup Compiler и нажмите **F9 (Compile)** (или кнопку «Run»).
 4. В папке `installer_output/` будет создан готовый установщик для передачи клиентам.

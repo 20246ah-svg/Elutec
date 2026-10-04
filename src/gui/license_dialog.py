@@ -3,18 +3,26 @@
 """
 
 import sys
-import tkinter as tk
-from tkinter import ttk, messagebox
+try:
+    import tkinter as tk
+    from tkinter import ttk, messagebox
+    _TK_IMPORT_ERROR = None
+except ImportError as exc:
+    tk = ttk = messagebox = None
+    _TK_IMPORT_ERROR = exc
 from ..utils.license_manager import (
     LicenseManager, get_hardware_id,
     LICENSE_STATUS_LICENSED, LICENSE_STATUS_TRIAL_ACTIVE, LICENSE_STATUS_TRIAL_EXPIRED
 )
+from .design_system import apply_ttk_theme
 
 
 class LicenseDialog:
     """Диалог активации и информации о лицензии."""
     
     def __init__(self, parent=None, config=None, lic_mgr=None, on_activated=None, block_if_expired=False):
+        if tk is None:
+            raise RuntimeError("Tkinter недоступен. Диалог лицензии невозможно открыть.") from _TK_IMPORT_ERROR
         self.parent = parent
         self.config = config or {}
         self.on_activated = on_activated
@@ -37,13 +45,19 @@ class LicenseDialog:
         
     def _build_ui(self):
         light = bool(self.config.get("light_theme", False))
-        bg = "#F2F3F8" if light else "#0E121B"
-        panel = "#FFFFFF" if light else "#111827"
-        fg = "#0E121B" if light else "#FFFFFF"
-        border = "#C6CDE1" if light else "#2A3451"
-        accent = "#2A3451" if light else "#A1ADCE"
-        brand = "#1E40AF" if light else "#3B82F6"
-        
+        style = ttk.Style(self.win)
+        try:
+            style.theme_use("clam")
+        except Exception:
+            pass
+        palette = apply_ttk_theme(style, light)
+        bg = palette['background']
+        panel = palette['surface']
+        fg = palette['text']
+        border = palette['border']
+        accent = palette['accent']
+        brand = palette['accent']
+
         self.win.configure(bg=bg)
         
         outer = ttk.Frame(self.win, padding=16)
@@ -54,23 +68,27 @@ class LicenseDialog:
         btn_bar.pack(side="bottom", fill="x", pady=(12, 0))
         
         if self.status.get("is_allowed", False):
-            ttk.Button(btn_bar, text="▶ Продолжить работу", command=self.win.destroy).pack(side="right")
+            ttk.Button(btn_bar, text="▶ Продолжить работу", style="Primary.TButton",
+                       command=self.win.destroy).pack(side="right")
         elif self.block_if_expired:
-            ttk.Button(btn_bar, text="Выход из программы", command=lambda: sys.exit(0)).pack(side="right")
+            ttk.Button(btn_bar, text="Выход из программы", style="Danger.TButton",
+                       command=lambda: sys.exit(0)).pack(side="right")
         else:
             ttk.Button(btn_bar, text="Закрыть", command=self.win.destroy).pack(side="right")
         
         # 1. Header
-        hdr = ttk.Frame(outer)
-        hdr.pack(fill="x", pady=(0, 10))
-        ttk.Label(hdr, text="Элютек: SARA RGB Анализ", font=("Segoe UI", 14, "bold")).pack(anchor="w")
-        ttk.Label(hdr, text="Управление лицензией и активация оборудования", font=("Segoe UI", 9)).pack(anchor="w")
+        hdr = ttk.Frame(outer, style="Header.TFrame")
+        hdr.pack(fill="x", pady=(0, 14))
+        ttk.Label(hdr, text="ЛИЦЕНЗИЯ И УСТРОЙСТВО", style="Eyebrow.TLabel").pack(anchor="w")
+        ttk.Label(hdr, text="Элютек · SARA RGB", style="Title.TLabel").pack(anchor="w")
+        ttk.Label(hdr, text="Проверьте статус или активируйте программу для этого компьютера.",
+                  style="Subtitle.TLabel").pack(anchor="w", pady=(1, 0))
         
         # 2. Hardware ID Frame
-        lf_hwid = ttk.LabelFrame(outer, text=" 💻 Аппаратный идентификатор (Hardware ID) ", padding=10)
+        lf_hwid = ttk.LabelFrame(outer, text="УСТРОЙСТВО · АППАРАТНЫЙ ИДЕНТИФИКАТОР", style="Card.TLabelframe", padding=12)
         lf_hwid.pack(fill="x", pady=(0, 10))
         
-        hw_row = ttk.Frame(lf_hwid)
+        hw_row = ttk.Frame(lf_hwid, style="Card.TFrame")
         hw_row.pack(fill="x")
         
         self.hwid_var = tk.StringVar(value=self.status.get("hwid", get_hardware_id()))
@@ -86,10 +104,11 @@ class LicenseDialog:
         self.copy_btn = ttk.Button(hw_row, text="📋 Скопировать", command=_copy_hwid, width=15)
         self.copy_btn.pack(side="right")
         
-        ttk.Label(lf_hwid, text="Отправьте этот идентификатор разработчику для получения ключа активации.", font=("Segoe UI", 8)).pack(anchor="w", pady=(4, 0))
+        ttk.Label(lf_hwid, text="Отправьте этот идентификатор разработчику для получения ключа активации.",
+                  style="CardMuted.TLabel").pack(anchor="w", pady=(6, 0))
 
         # 3. License Status Frame
-        lf_stat = ttk.LabelFrame(outer, text=" 📊 Текущий статус лицензии ", padding=10)
+        lf_stat = ttk.LabelFrame(outer, text="СТАТУС ЛИЦЕНЗИИ", style="Card.TLabelframe", padding=12)
         lf_stat.pack(fill="x", pady=(0, 10))
         
         stat_code = self.status.get("status")
@@ -108,15 +127,15 @@ class LicenseDialog:
             
         lbl_status = tk.Label(lf_stat, text=stat_text, font=("Segoe UI", 11, "bold"), fg=stat_color, bg=panel, padx=6, pady=4)
         lbl_status.pack(fill="x")
-        ttk.Label(lf_stat, text=desc_text, font=("Segoe UI", 9)).pack(anchor="w", pady=(4, 0))
+        ttk.Label(lf_stat, text=desc_text, style="CardMuted.TLabel").pack(anchor="w", pady=(5, 0))
 
         # 4. Activation Key Input Frame
-        lf_key = ttk.LabelFrame(outer, text=" 🔑 Ввод ключа активации ", padding=10)
+        lf_key = ttk.LabelFrame(outer, text="АКТИВАЦИЯ · КЛЮЧ ДОСТУПА", style="Card.TLabelframe", padding=12)
         lf_key.pack(fill="x", pady=(0, 10))
         
-        row_k = ttk.Frame(lf_key)
+        row_k = ttk.Frame(lf_key, style="Card.TFrame")
         row_k.pack(fill="x", pady=2)
-        ttk.Label(row_k, text="Ключ активации:", font=("Segoe UI", 9, "bold")).pack(side="left", padx=(0, 6))
+        ttk.Label(row_k, text="Ключ активации:", style="Card.TLabel", font=("Segoe UI", 9, "bold")).pack(side="left", padx=(0, 6))
         self.key_var = tk.StringVar()
         self.key_entry = ttk.Entry(row_k, textvariable=self.key_var, font=("Consolas", 11, "bold"))
         self.key_entry.pack(side="left", fill="x", expand=True, padx=(0, 6))
@@ -133,9 +152,9 @@ class LicenseDialog:
         btn_paste_k.pack(side="right")
 
         # Optional client name field
-        row_name = ttk.Frame(lf_key)
+        row_name = ttk.Frame(lf_key, style="Card.TFrame")
         row_name.pack(fill="x", pady=(6, 2))
-        ttk.Label(row_name, text="Клиент / Организация (необязательно):", font=("Segoe UI", 8)).pack(side="left", padx=(0, 6))
+        ttk.Label(row_name, text="Клиент / организация (необязательно):", style="CardMuted.TLabel").pack(side="left", padx=(0, 6))
         self.client_var = tk.StringVar()
         ttk.Entry(row_name, textvariable=self.client_var, font=("Segoe UI", 9)).pack(side="left", fill="x", expand=True)
 
@@ -159,6 +178,7 @@ class LicenseDialog:
             else:
                 messagebox.showerror("❌ Ошибка активации", msg, parent=self.win)
                 
-        btn_act_row = ttk.Frame(lf_key)
+        btn_act_row = ttk.Frame(lf_key, style="Card.TFrame")
         btn_act_row.pack(fill="x", pady=(8, 0))
-        ttk.Button(btn_act_row, text="🔑 Активировать лицензию", command=_do_activate).pack(side="right")
+        ttk.Button(btn_act_row, text="🔑 Активировать лицензию", style="Primary.TButton",
+                   command=_do_activate).pack(side="right")

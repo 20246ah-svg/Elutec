@@ -5,7 +5,7 @@ echo   Сборка релиза «Элютек» (EXE + Установщик)
 echo ============================================================
 
 echo [1/3] Проверка и установка зависимостей...
-pip install -r requirements.txt pyinstaller
+pip install -r requirements-build.txt
 
 echo.
 echo [2/3] Сборка EXE через PyInstaller...
