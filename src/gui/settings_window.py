@@ -137,7 +137,7 @@ DEFAULT_CONFIG = {
     "auto_stop_file": True,
     "playback_speed": 1.0,
     "seek_step_sec": 5,
-    "light_theme": True,
+    "light_theme": False,
 }
 
 NOTIFICATION_DEFAULTS = DEFAULT_CONFIG
@@ -235,7 +235,7 @@ class SettingsWindow:
         except Exception:
             pass
 
-        light = bool(self.config.get("light_theme", True))
+        light = bool(self.config.get("light_theme", False))
         colors = get_palette(light)
         bg = colors['background']
         panel = colors['surface']
@@ -1725,7 +1725,7 @@ class SettingsWindow:
                 win = f"{t_min_m:.1f} - {t_max_m:.1f} мин" if t_max > 0 else f"от {t_min_m:.1f} мин (до конца)"
             else:
                 win = f"{t_min:g} - {t_max:g} с" if t_max > 0 else f"от {t_min:g} с (до конца)"
-            color = rule.get("color", get_palette(bool(self.config.get("light_theme", True)))["success"])
+            color = rule.get("color", get_palette(bool(self.config.get("light_theme", False)))["success"])
             sound = "🔊 Да" if rule.get("sound", True) else "Нет"
             self.custom_marks_tree.insert("", "end", iid=str(idx), values=(status, name, cond, win, color, sound))
 
@@ -1772,7 +1772,7 @@ class SettingsWindow:
         dlg.transient(self.win)
         dlg.grab_set()
 
-        light = bool(self.config.get("light_theme", True))
+        light = bool(self.config.get("light_theme", False))
         colors = get_palette(light)
         bg = colors['background']
         panel = colors['surface']
@@ -1789,7 +1789,7 @@ class SettingsWindow:
         name_var = tk.StringVar(value=rule.get("name", "Пользовательская метка"))
         ttk.Entry(r0, textvariable=name_var).pack(side="left", fill="x", expand=True, padx=(0, 10))
 
-        color_var = tk.StringVar(value=rule.get("color", get_palette(bool(self.config.get("light_theme", True)))["success"]))
+        color_var = tk.StringVar(value=rule.get("color", get_palette(bool(self.config.get("light_theme", False)))["success"]))
         color_preview = tk.Canvas(r0, width=24, height=22, bg=color_var.get(), highlightthickness=1)
         color_preview.pack(side="left", padx=(0, 6))
 
@@ -2066,7 +2066,7 @@ class SettingsWindow:
                 "t_max_sec": t_max_sec,
                 "cooldown_enabled": bool(cooldown_enabled_var.get()),
                 "cooldown_sec": cooldown_sec,
-                "color": color_var.get().strip() or get_palette(bool(self.config.get("light_theme", True)))["success"],
+                "color": color_var.get().strip() or get_palette(bool(self.config.get("light_theme", False)))["success"],
                 "sound": bool(sound_var.get()),
                 "notify": bool(notify_var.get()),
             }
@@ -2116,12 +2116,12 @@ class SettingsWindow:
             return
         self.custom_graph_list.delete(0, tk.END)
         for g in self._custom_graphs:
-            self.custom_graph_list.insert(tk.END, f"  📈 {g.get('name', 'График')}: {g.get('formula', '')} [{g.get('color', get_palette(bool(self.config.get('light_theme', True)))['accent'])}]")
+            self.custom_graph_list.insert(tk.END, f"  📈 {g.get('name', 'График')}: {g.get('formula', '')} [{g.get('color', get_palette(bool(self.config.get('light_theme', False)))['accent'])}]")
 
     def _add_custom_graph(self):
         name = self.custom_name_var.get().strip()
         formula = self.custom_formula_var.get().strip()
-        color = self.custom_color_var.get().strip() or get_palette(bool(self.config.get("light_theme", True)))["accent"]
+        color = self.custom_color_var.get().strip() or get_palette(bool(self.config.get("light_theme", False)))["accent"]
         if not name or not formula:
             messagebox.showwarning("Графики", "Укажите название и формулу графика.", parent=self.win)
             return
@@ -2145,7 +2145,7 @@ class SettingsWindow:
         dlg.transient(self.win)
         dlg.grab_set()
 
-        light = bool(self.config.get("light_theme", True))
+        light = bool(self.config.get("light_theme", False))
         colors = get_palette(light)
         bg = colors['background']
         panel = colors['surface']

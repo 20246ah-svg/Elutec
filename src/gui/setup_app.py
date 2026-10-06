@@ -1,5 +1,4 @@
 import json
-import textwrap
 import tkinter as tk
 from tkinter import ttk, messagebox, filedialog
 from .settings_window import SettingsWindow, load_saved_settings
@@ -23,7 +22,6 @@ from ..utils.helpers import (
 )
 from ..utils.ffmpeg_utils import ensure_pyqt5_platform_plugin_path
 from ..analysis.runner import run_analysis
-from ..config import ELUTEK_LIGHT_BG, ELUTEK_200, ELUTEK_300, ELUTEK_BRAND, ELUTEK_600, ELUTEK_INK, ELUTEK_ACCENT, ELUTEK_PANEL_DARK
 from ..utils.license_manager import (
     LicenseManager, LICENSE_STATUS_LICENSED,
     LICENSE_STATUS_TRIAL_ACTIVE, LICENSE_STATUS_TRIAL_EXPIRED
@@ -147,7 +145,7 @@ class SetupApp:
             'live_roi': True,
             'allow_roi_resize': True,
             'auto_stop_file': True,
-            'light_theme': True,
+            'light_theme': False,
             'custom_graphs': [],
             # Automatic notification / annotation settings.
             'notifications_enabled': True,
@@ -253,7 +251,7 @@ class SetupApp:
         except Exception:
             pass
 
-        light = bool(self.config.get('light_theme', True))
+        light = bool(self.config.get('light_theme', False))
         colors = get_palette(light)
         bg = colors['background']
         surface = colors['surface']
@@ -267,127 +265,121 @@ class SetupApp:
         self.root.configure(bg=bg)
         style.configure('.', font=('Segoe UI', 10), background=bg, foreground=fg)
         style.configure('TFrame', background=bg)
-        style.configure('App.TFrame', background=bg)
-        style.configure('Header.TFrame', background=surface)
+        for name, color in (
+            ('App.TFrame', bg), ('Topbar.TFrame', surface), ('Header.TFrame', surface),
+            ('Control.TFrame', surface), ('Section.TFrame', surface),
+            ('Stage.TFrame', colors['video_background']), ('Card.TFrame', surface),
+            ('CardInset.TFrame', surface_alt), ('Metric.TFrame', surface),
+        ):
+            style.configure(name, background=color, relief='flat', borderwidth=0)
+
+        label_styles = {
+            'TLabel': (bg, fg, ('Segoe UI', 10, 'normal')),
+            'Header.TLabel': (surface, fg, ('Segoe UI', 10, 'normal')),
+            'Brand.TLabel': (surface, fg, ('Segoe UI', 15, 'bold')),
+            'BrandMark.TLabel': (accent, colors['accent_on'], ('Segoe UI', 14, 'bold')),
+            'Title.TLabel': (surface, fg, ('Segoe UI', 16, 'bold')),
+            'Subtitle.TLabel': (surface, muted, ('Segoe UI', 9, 'normal')),
+            'SectionTitle.TLabel': (bg, fg, ('Segoe UI', 15, 'bold')),
+            'SectionSub.TLabel': (bg, muted, ('Segoe UI', 9, 'normal')),
+            'CardTitle.TLabel': (surface, fg, ('Segoe UI', 10, 'bold')),
+            'CardMuted.TLabel': (surface, muted, ('Segoe UI', 9, 'normal')),
+            'Muted.TLabel': (bg, muted, ('Segoe UI', 9, 'normal')),
+            'Eyebrow.TLabel': (surface, accent, ('Consolas', 8, 'bold')),
+            'PageEyebrow.TLabel': (bg, accent, ('Consolas', 8, 'bold')),
+            'MetricName.TLabel': (surface, muted, ('Consolas', 8, 'bold')),
+            'MetricValue.TLabel': (surface, fg, ('Consolas', 19, 'normal')),
+            'R.TLabel': (surface, colors['channel_r'], ('Consolas', 9, 'bold')),
+            'G.TLabel': (surface, colors['channel_g'], ('Consolas', 9, 'bold')),
+            'B.TLabel': (surface, colors['channel_b'], ('Consolas', 9, 'bold')),
+            'OnlineBadge.TLabel': (colors['success_soft'], colors['success'], ('Consolas', 8, 'bold')),
+            'WaitingBadge.TLabel': (surface_alt, muted, ('Consolas', 8, 'bold')),
+            'Preview.TLabel': (colors['video_background'], fg, ('Segoe UI', 10, 'normal')),
+        }
+        for name, (background, foreground, font) in label_styles.items():
+            style.configure(name, background=background, foreground=foreground, font=font)
+        style.configure('BrandMark.TLabel', padding=(9, 6), anchor='center')
+        style.configure('OnlineBadge.TLabel', padding=(8, 5))
+        style.configure('WaitingBadge.TLabel', padding=(8, 5))
+
         style.configure(
-            'Card.TFrame', background=surface, relief='solid', borderwidth=1,
-            bordercolor=border, lightcolor=border, darkcolor=border
+            'TButton', background=surface_alt, foreground=fg, borderwidth=1,
+            bordercolor=border, lightcolor=border, darkcolor=border,
+            focusthickness=0, padding=(9, 6), font=('Segoe UI', 9, 'bold')
         )
-        style.configure('CardInset.TFrame', background=surface_alt)
-        style.configure('Metric.TFrame', background=surface, relief='solid', borderwidth=1,
-                        bordercolor=border, lightcolor=border, darkcolor=border)
-
-        style.configure('TLabel', background=bg, foreground=fg)
-        style.configure('Header.TLabel', background=surface, foreground=fg)
-        style.configure('BrandMark.TLabel', background=accent, foreground=colors['accent_on'],
-                        font=('Segoe UI', 15, 'bold'), padding=(10, 6))
-        style.configure('Title.TLabel', background=surface, foreground=fg,
-                        font=('Segoe UI', 16, 'bold'))
-        style.configure('Subtitle.TLabel', background=surface, foreground=muted,
-                        font=('Segoe UI', 9))
-        style.configure('SectionTitle.TLabel', background=bg, foreground=fg,
-                        font=('Segoe UI', 16, 'bold'))
-        style.configure('SectionSub.TLabel', background=bg, foreground=muted,
-                        font=('Segoe UI', 9))
-        style.configure('CardTitle.TLabel', background=surface, foreground=fg,
-                        font=('Segoe UI', 10, 'bold'))
-        style.configure('CardText.TLabel', background=surface, foreground=fg)
-        style.configure('CardMuted.TLabel', background=surface, foreground=muted,
-                        font=('Segoe UI', 9))
-        style.configure('Muted.TLabel', background=bg, foreground=muted,
-                        font=('Segoe UI', 9))
-        style.configure('Eyebrow.TLabel', background=surface, foreground=muted,
-                        font=('Segoe UI', 8, 'bold'))
-        style.configure('MetricName.TLabel', background=surface, foreground=muted,
-                        font=('Segoe UI', 9, 'bold'))
-        style.configure('MetricValue.TLabel', background=surface, foreground=fg,
-                        font=('Segoe UI', 20, 'bold'))
-        style.configure('R.TLabel', background=surface, foreground=colors['channel_r'],
-                        font=('Segoe UI', 9, 'bold'))
-        style.configure('G.TLabel', background=surface, foreground=colors['channel_g'],
-                        font=('Segoe UI', 9, 'bold'))
-        style.configure('B.TLabel', background=surface, foreground=colors['channel_b'],
-                        font=('Segoe UI', 9, 'bold'))
-        style.configure('OnlineBadge.TLabel', background=colors['success_soft'],
-                        foreground=colors['success'], padding=(10, 5), font=('Segoe UI', 9, 'bold'))
-        style.configure('WaitingBadge.TLabel', background=surface_alt,
-                        foreground=muted, padding=(10, 5), font=('Segoe UI', 9, 'bold'))
-        style.configure('Preview.TLabel', background=colors['video_background'], foreground=colors['text'])
-
-        style.configure('TButton', background=surface, foreground=fg, borderwidth=1,
-                        bordercolor=border, lightcolor=border, darkcolor=border,
-                        focusthickness=0, padding=(10, 7), font=('Segoe UI', 9, 'bold'))
-        style.map('TButton', background=[('disabled', surface_alt), ('pressed', colors['surface_hover']), ('active', colors['surface_hover'])],
-                  foreground=[('disabled', muted)], bordercolor=[('active', colors['accent'])])
+        style.map('TButton',
+                  background=[('disabled', surface_alt), ('pressed', colors['surface_hover']), ('active', colors['surface_hover'])],
+                  foreground=[('disabled', muted)], bordercolor=[('active', accent)])
         style.configure('Primary.TButton', background=accent, foreground=colors['accent_on'],
-                        borderwidth=0, padding=(14, 10), font=('Segoe UI', 10, 'bold'))
-        style.map('Primary.TButton', background=[('disabled', border), ('pressed', colors['accent_hover']), ('active', colors['accent_hover'])],
+                        borderwidth=0, padding=(13, 9), font=('Segoe UI', 10, 'bold'))
+        style.map('Primary.TButton',
+                  background=[('disabled', border), ('pressed', colors['accent_hover']), ('active', colors['accent_hover'])],
                   foreground=[('disabled', muted)])
         style.configure('Secondary.TButton', background=colors['accent_soft'], foreground=accent,
-                        borderwidth=0, padding=(10, 8), font=('Segoe UI', 9, 'bold'))
+                        borderwidth=0, padding=(10, 7), font=('Segoe UI', 9, 'bold'))
         style.map('Secondary.TButton', background=[('pressed', colors['surface_hover']), ('active', colors['surface_hover'])],
                   foreground=[('disabled', muted)])
         style.configure('Quiet.TButton', background=surface, foreground=fg, borderwidth=1,
-                        bordercolor=border, padding=(9, 7), font=('Segoe UI', 9, 'bold'))
+                        bordercolor=border, padding=(9, 6), font=('Segoe UI', 9, 'bold'))
         style.map('Quiet.TButton', background=[('pressed', colors['surface_hover']), ('active', colors['surface_hover'])],
-                  bordercolor=[('active', colors['accent'])])
-        style.configure('Small.TButton', background=surface_alt, foreground=fg, borderwidth=0,
-                        padding=(5, 3), font=('Segoe UI', 9, 'bold'))
-        style.map('Small.TButton', background=[('pressed', colors['surface_hover']), ('active', colors['surface_hover'])])
+                  bordercolor=[('active', accent)])
+        style.configure('Small.TButton', background=surface_alt, foreground=muted, borderwidth=0,
+                        padding=(5, 3), font=('Segoe UI', 8, 'bold'))
+        style.map('Small.TButton', background=[('pressed', colors['surface_hover']), ('active', colors['surface_hover'])],
+                  foreground=[('active', accent)])
         style.configure('Danger.TButton', background=colors['danger_soft'], foreground=colors['danger'],
                         borderwidth=0, padding=(9, 7), font=('Segoe UI', 9, 'bold'))
         style.map('Danger.TButton', background=[('pressed', colors['danger_soft']), ('active', colors['danger_soft'])])
 
-        style.configure('TEntry', fieldbackground=surface_alt, foreground=fg, padding=(8, 7),
+        style.configure('TEntry', fieldbackground=surface_alt, foreground=fg, padding=(7, 6),
                         bordercolor=border, lightcolor=border, darkcolor=border,
                         insertcolor=fg, insertwidth=2)
         style.map('TEntry', fieldbackground=[('focus', surface), ('disabled', surface_alt)],
                   foreground=[('focus', fg), ('disabled', muted)])
         style.configure('TSpinbox', fieldbackground=surface_alt, foreground=fg, background=surface_alt,
-                        arrowcolor=muted, padding=(6, 5), bordercolor=border,
+                        arrowcolor=muted, padding=(5, 4), bordercolor=border,
                         lightcolor=border, darkcolor=border, insertcolor=fg)
         style.map('TSpinbox', fieldbackground=[('focus', surface), ('active', surface)],
                   foreground=[('focus', fg), ('active', fg)], background=[('focus', surface), ('active', surface)],
                   arrowcolor=[('focus', accent), ('active', accent)])
         style.configure('TCombobox', fieldbackground=surface_alt, background=surface_alt,
-                        foreground=fg, arrowcolor=muted, padding=(7, 6), bordercolor=border,
+                        foreground=fg, arrowcolor=muted, padding=(6, 5), bordercolor=border,
                         lightcolor=border, darkcolor=border)
         style.map('TCombobox', fieldbackground=[('readonly', surface_alt), ('focus', surface), ('active', surface)],
                   foreground=[('readonly', fg), ('focus', fg), ('active', fg)],
                   background=[('readonly', surface_alt), ('focus', surface), ('active', surface)],
                   arrowcolor=[('readonly', muted), ('focus', accent), ('active', accent)])
-
-        style.configure('TRadiobutton', background=surface, foreground=fg, padding=(8, 5))
+        style.configure('TRadiobutton', background=surface, foreground=fg, padding=(5, 3), font=('Segoe UI', 9))
         style.map('TRadiobutton', background=[('active', surface_alt), ('pressed', surface_alt)],
                   foreground=[('active', fg), ('pressed', fg)])
-        style.configure('TCheckbutton', background=surface, foreground=fg, padding=(4, 4))
+        style.configure('TCheckbutton', background=surface, foreground=fg, padding=(3, 3), font=('Segoe UI', 9))
         style.map('TCheckbutton', background=[('active', surface), ('pressed', surface)],
                   foreground=[('active', fg), ('pressed', fg)])
         style.configure('TNotebook', background=bg, borderwidth=0, tabmargins=(0, 0, 0, 0))
         style.configure('TNotebook.Tab', background=surface_alt, foreground=muted,
-                        padding=(13, 9), borderwidth=0, font=('Segoe UI', 9, 'bold'))
+                        padding=(12, 8), borderwidth=0, font=('Segoe UI', 9, 'bold'))
         style.map('TNotebook.Tab', background=[('selected', colors['accent_soft']), ('active', colors['surface_hover'])],
                   foreground=[('selected', accent), ('active', fg)])
         style.configure('TLabelframe', background=surface, foreground=fg, bordercolor=border,
                         lightcolor=border, darkcolor=border, relief='solid', borderwidth=1)
         style.configure('TLabelframe.Label', background=surface, foreground=fg,
-                        font=('Segoe UI', 10, 'bold'), padding=(4, 0))
+                        font=('Segoe UI', 9, 'bold'), padding=(4, 0))
         style.configure('Treeview', background=surface, fieldbackground=surface,
-                        foreground=fg, bordercolor=border, rowheight=30, font=('Segoe UI', 9))
+                        foreground=fg, bordercolor=border, rowheight=28, font=('Segoe UI', 9))
         style.map('Treeview', background=[('selected', colors['accent_soft'])],
                   foreground=[('selected', accent)])
         style.configure('Treeview.Heading', background=surface_alt, foreground=muted,
-                        font=('Segoe UI', 9, 'bold'), relief='flat', padding=(8, 7))
-        style.map('Treeview.Heading', background=[('active', colors['surface_hover'])],
-                  foreground=[('active', fg)])
-        style.configure('Vertical.TScrollbar', background=bg, troughcolor=bg,
-                        bordercolor=bg, arrowcolor=muted, gripcount=0)
+                        font=('Segoe UI', 8, 'bold'), relief='flat', padding=(7, 6))
+        style.map('Treeview.Heading', background=[('active', colors['surface_hover'])], foreground=[('active', fg)])
+        style.configure('TSeparator', background=border)
+        style.configure('Vertical.TScrollbar', background=surface_alt, troughcolor=surface,
+                        bordercolor=surface, arrowcolor=muted, gripcount=0)
 
         if hasattr(self, 'devices_listbox'):
             try:
                 self.devices_listbox.configure(
-                    bg=surface, fg=fg, selectbackground=colors['accent_soft'],
-                    selectforeground=accent, font=('Segoe UI', 9), relief='flat', bd=0,
+                    bg=surface_alt, fg=fg, selectbackground=colors['accent_soft'],
+                    selectforeground=accent, font=('Segoe UI', 8), relief='flat', bd=0,
                     highlightthickness=1, highlightbackground=border, highlightcolor=accent,
                     activestyle='none'
                 )
@@ -395,16 +387,14 @@ class SetupApp:
                 pass
         if hasattr(self, 'preview_color_canvas'):
             try:
-                self.preview_color_canvas.configure(
-                    bg=surface_alt, highlightthickness=1, highlightbackground=border
-                )
+                self.preview_color_canvas.configure(bg=surface_alt, highlightthickness=1,
+                                                    highlightbackground=border)
             except Exception:
                 pass
         if hasattr(self, 'preview_rgb_canvas'):
             try:
-                self.preview_rgb_canvas.configure(
-                    bg=surface, highlightthickness=1, highlightbackground=border
-                )
+                self.preview_rgb_canvas.configure(bg=surface, highlightthickness=1,
+                                                  highlightbackground=border)
             except Exception:
                 pass
         if hasattr(self, 'preview_label'):
@@ -414,7 +404,14 @@ class SetupApp:
                 pass
         if hasattr(self, 'left_canvas'):
             try:
-                self.left_canvas.configure(bg=bg, highlightthickness=0)
+                self.left_canvas.configure(bg=surface, highlightthickness=0)
+            except Exception:
+                pass
+        if hasattr(self, 'camera_status_badge'):
+            try:
+                self.camera_status_badge.configure(
+                    style='OnlineBadge.TLabel' if self._preview_has_frame else 'WaitingBadge.TLabel'
+                )
             except Exception:
                 pass
         if hasattr(self, 'theme_btn'):
@@ -422,6 +419,8 @@ class SetupApp:
                 self.theme_btn.config(text='Тёмная тема' if light else 'Светлая тема')
             except Exception:
                 pass
+        if hasattr(self, 'brand_canvas'):
+            self._draw_brand_mark()
         self._update_license_ui()
 
     def _set_preview_connection_state(self, connected):
@@ -435,6 +434,8 @@ class SetupApp:
                 self.camera_status_badge.configure(
                     style='OnlineBadge.TLabel' if connected else 'WaitingBadge.TLabel'
                 )
+            if hasattr(self, 'preview_spec_label'):
+                self.preview_spec_label.config(text='RGB  ·  SIGNAL ACTIVE' if connected else 'RGB  ·  LIVE INPUT')
         except Exception:
             pass
 
@@ -481,248 +482,233 @@ class SetupApp:
             style.theme_use('clam')
         except Exception:
             pass
-        try:
-            self._apply_start_theme()
-        except Exception:
-            pass
+        self._apply_start_theme()
 
+        colors = self._ui_palette
         app_shell = ttk.Frame(self.root, style='App.TFrame')
         app_shell.pack(fill='both', expand=True)
 
-        # Compact product header: identity and utilities stay separate from the
-        # camera and analysis controls below.
-        header = ttk.Frame(app_shell, style='Header.TFrame', padding=(22, 13))
+        # Slim product header: identity, connection context, and global actions.
+        header = ttk.Frame(app_shell, style='Topbar.TFrame', padding=(18, 10, 18, 10))
         header.pack(fill='x')
-        brand_mark = ttk.Label(header, text='E', style='BrandMark.TLabel', anchor='center')
-        brand_mark.pack(side='left')
-        brand_copy = ttk.Frame(header, style='Header.TFrame')
-        brand_copy.pack(side='left', padx=(12, 0))
-        ttk.Label(brand_copy, text='Элютек · SARA RGB', style='Title.TLabel').pack(anchor='w')
-        ttk.Label(brand_copy, text='Визуально-оптический контроль фракционирования',
-                  style='Subtitle.TLabel').pack(anchor='w', pady=(1, 0))
+        self.brand_canvas = tk.Canvas(header, width=38, height=38, bd=0, highlightthickness=0,
+                                      bg=colors['surface'])
+        self.brand_canvas.pack(side='left')
+        self._draw_brand_mark()
+        brand_copy = ttk.Frame(header, style='Topbar.TFrame')
+        brand_copy.pack(side='left', padx=(10, 18))
+        ttk.Label(brand_copy, text='ELUTEC  /  LAB SYSTEMS', style='Eyebrow.TLabel').pack(anchor='w')
+        ttk.Label(brand_copy, text='SARA RGB', style='Title.TLabel').pack(anchor='w', pady=(1, 0))
+        ttk.Separator(header, orient='vertical').pack(side='left', fill='y', padx=(0, 16), pady=3)
+        header_context = ttk.Frame(header, style='Topbar.TFrame')
+        header_context.pack(side='left', fill='x', expand=True)
+        ttk.Label(header_context, text='РАБОЧАЯ КОНСОЛЬ', style='Eyebrow.TLabel').pack(anchor='w')
+        ttk.Label(header_context, text='Визуальный контроль фракционирования',
+                  style='Subtitle.TLabel').pack(anchor='w', pady=(2, 0))
 
+        self.lic_btn = ttk.Button(header, text='Лицензия', command=self.open_license_dialog, style='Quiet.TButton')
+        self.lic_btn.pack(side='right', padx=(7, 0))
+        settings_btn = ttk.Button(header, text='Параметры', command=self.open_settings, style='Secondary.TButton')
+        settings_btn.pack(side='right', padx=(7, 0))
         self.theme_btn = ttk.Button(
-            header, text='Тёмная тема' if self.config.get('light_theme', True) else 'Светлая тема',
+            header, text='Светлая тема' if not self.config.get('light_theme', False) else 'Тёмная тема',
             command=self.toggle_theme, style='Quiet.TButton'
         )
         self.theme_btn.pack(side='right')
-        settings_btn = ttk.Button(
-            header, text='Настройки', command=self.open_settings, style='Secondary.TButton'
-        )
-        settings_btn.pack(side='right', padx=(0, 8))
-        self.lic_btn = ttk.Button(
-            header, text='Лицензия', command=self.open_license_dialog, style='Quiet.TButton'
-        )
-        self.lic_btn.pack(side='right', padx=(0, 8))
         self._update_license_ui()
 
-        main = ttk.Frame(app_shell, style='App.TFrame', padding=(20, 15, 20, 18))
-        main.pack(fill='both', expand=True)
-
-        # Workspace heading and live connection state.
-        workspace_heading = ttk.Frame(main, style='App.TFrame')
-        workspace_heading.pack(fill='x', pady=(0, 13))
-        heading_copy = ttk.Frame(workspace_heading, style='App.TFrame')
-        heading_copy.pack(side='left', fill='x', expand=True)
-        ttk.Label(heading_copy, text='Рабочее пространство', style='SectionTitle.TLabel').pack(anchor='w')
-        ttk.Label(heading_copy, text='Подключите источник, проверьте область ROI и запускайте анализ.',
-                  style='SectionSub.TLabel').pack(anchor='w', pady=(3, 0))
+        body = ttk.Frame(app_shell, style='App.TFrame', padding=(16, 12, 16, 12))
+        body.pack(fill='both', expand=True)
+        page_head = ttk.Frame(body, style='App.TFrame')
+        page_head.pack(fill='x', pady=(0, 10))
+        page_title = ttk.Frame(page_head, style='App.TFrame')
+        page_title.pack(side='left', fill='x', expand=True)
+        ttk.Label(page_title, text='SESSION / 01', style='PageEyebrow.TLabel').pack(anchor='w')
+        ttk.Label(page_title, text='Мониторинг', style='SectionTitle.TLabel').pack(anchor='w', pady=(1, 0))
         self.camera_status_badge = ttk.Label(
-            workspace_heading, textvariable=self.camera_status_var, style='WaitingBadge.TLabel'
+            page_head, textvariable=self.camera_status_var, style='WaitingBadge.TLabel'
         )
-        self.camera_status_badge.pack(side='right', padx=(12, 0), pady=(3, 0))
+        self.camera_status_badge.pack(side='right', padx=(8, 0), pady=(5, 0))
 
-        main_body = ttk.Frame(main, style='App.TFrame')
+        main_body = ttk.Frame(body, style='App.TFrame')
         main_body.pack(fill='both', expand=True)
 
-        # Scrollable control rail; the session action stays pinned at the bottom.
-        left_outer = ttk.Frame(main_body, width=326, style='App.TFrame')
+        # The control rail scrolls independently; the primary action remains fixed.
+        left_outer = ttk.Frame(main_body, width=306, style='Control.TFrame')
         left_outer.pack(side='left', fill='y')
         left_outer.pack_propagate(False)
-
-        scroll_area = ttk.Frame(left_outer, style='App.TFrame')
+        scroll_area = ttk.Frame(left_outer, style='Control.TFrame')
         scroll_area.pack(fill='both', expand=True)
-        left_canvas = tk.Canvas(scroll_area, highlightthickness=0, bd=0)
-        self.left_canvas = left_canvas
-        left_scrollbar = ttk.Scrollbar(scroll_area, orient='vertical', command=left_canvas.yview)
-        left_canvas.configure(yscrollcommand=left_scrollbar.set)
-        left_canvas.pack(side='left', fill='both', expand=True)
+        self.left_canvas = tk.Canvas(scroll_area, highlightthickness=0, bd=0, bg=colors['surface'])
+        left_scrollbar = ttk.Scrollbar(scroll_area, orient='vertical', command=self.left_canvas.yview)
+        self.left_canvas.configure(yscrollcommand=left_scrollbar.set)
+        self.left_canvas.pack(side='left', fill='both', expand=True)
         left_scrollbar.pack(side='right', fill='y')
-
-        left = ttk.Frame(left_canvas, style='App.TFrame')
-        left_window_id = left_canvas.create_window((0, 0), window=left, anchor='nw')
+        left = ttk.Frame(self.left_canvas, style='Control.TFrame')
+        left_window_id = self.left_canvas.create_window((0, 0), window=left, anchor='nw')
 
         def _update_left_scrollregion(event=None):
-            left_canvas.configure(scrollregion=left_canvas.bbox('all'))
+            self.left_canvas.configure(scrollregion=self.left_canvas.bbox('all'))
 
         def _fit_left_width(event):
-            left_canvas.itemconfigure(left_window_id, width=event.width)
+            self.left_canvas.itemconfigure(left_window_id, width=event.width)
 
         def _on_left_mousewheel(event):
-            left_canvas.yview_scroll(int(-1 * (event.delta / 120)), 'units')
+            if getattr(event, 'num', None) == 4:
+                self.left_canvas.yview_scroll(-1, 'units')
+            elif getattr(event, 'num', None) == 5:
+                self.left_canvas.yview_scroll(1, 'units')
+            else:
+                delta = int(-1 * (event.delta / 120)) if getattr(event, 'delta', 0) else 0
+                if delta:
+                    self.left_canvas.yview_scroll(delta, 'units')
 
         left.bind('<Configure>', _update_left_scrollregion)
-        left_canvas.bind('<Configure>', _fit_left_width)
-        left_canvas.bind('<Enter>', lambda event: left_canvas.bind_all('<MouseWheel>', _on_left_mousewheel))
-        left_canvas.bind('<Leave>', lambda event: left_canvas.unbind_all('<MouseWheel>'))
+        self.left_canvas.bind('<Configure>', _fit_left_width)
+        left_canvas = self.left_canvas
 
-        def make_card(parent, title, description=None):
-            card = ttk.Frame(parent, style='Card.TFrame', padding=13)
-            card.pack(fill='x', pady=(0, 10))
-            title_row = ttk.Frame(card, style='Card.TFrame')
-            title_row.pack(fill='x')
-            ttk.Label(title_row, text=title, style='CardTitle.TLabel').pack(side='left', anchor='w')
-            if description:
-                ttk.Label(card, text=description, style='CardMuted.TLabel', wraplength=270,
-                          justify='left').pack(anchor='w', pady=(4, 10))
-            else:
-                title_row.pack_configure(pady=(0, 10))
-            return card
+        def _bind_scroll(event=None):
+            for sequence in ('<MouseWheel>', '<Button-4>', '<Button-5>'):
+                left_canvas.bind_all(sequence, _on_left_mousewheel)
 
-        # Camera discovery
-        frame_scan = make_card(left, 'Устройства', 'Найдите подключённый RGB-детектор или камеру.')
-        btn_frame = ttk.Frame(frame_scan, style='Card.TFrame')
-        btn_frame.pack(fill='x', pady=(0, 8))
-        btn_frame.columnconfigure(0, weight=1)
-        btn_frame.columnconfigure(1, weight=1)
-        ttk.Button(btn_frame, text='RGB-детектор', command=self.scan_rgb_detector,
-                   style='Quiet.TButton').grid(row=0, column=0, sticky='ew', padx=(0, 4), pady=(0, 5))
-        ttk.Button(btn_frame, text='USB-камеры', command=self.scan_usb_cameras,
-                   style='Quiet.TButton').grid(row=0, column=1, sticky='ew', padx=(4, 0), pady=(0, 5))
-        ttk.Button(btn_frame, text='IP-камеры', command=self.scan_network_cameras,
-                   style='Quiet.TButton').grid(row=1, column=0, columnspan=2, sticky='ew')
+        def _unbind_scroll(event=None):
+            for sequence in ('<MouseWheel>', '<Button-4>', '<Button-5>'):
+                left_canvas.unbind_all(sequence)
 
-        devices_box_frame = ttk.Frame(frame_scan, style='CardInset.TFrame', padding=4)
-        devices_box_frame.pack(fill='both', expand=True, pady=(0, 8))
-        self.devices_listbox = tk.Listbox(devices_box_frame, height=4, width=34, activestyle='none')
+        left_canvas.bind('<Enter>', _bind_scroll)
+        left_canvas.bind('<Leave>', _unbind_scroll)
+
+        def make_section(parent, number, eyebrow, title):
+            section = ttk.Frame(parent, style='Card.TFrame', padding=(13, 11, 13, 12))
+            section.pack(fill='x')
+            heading = ttk.Frame(section, style='Card.TFrame')
+            heading.pack(fill='x', pady=(0, 10))
+            ttk.Label(heading, text=number, style='Eyebrow.TLabel', width=3).pack(side='left', anchor='n')
+            copy = ttk.Frame(heading, style='Card.TFrame')
+            copy.pack(side='left', fill='x', expand=True)
+            ttk.Label(copy, text=eyebrow, style='Eyebrow.TLabel').pack(anchor='w')
+            ttk.Label(copy, text=title, style='CardTitle.TLabel').pack(anchor='w', pady=(2, 0))
+            return section
+
+        # 01 — device discovery, source selection, and file input.
+        frame_scan = make_section(left, '01', 'ВВОД', 'Источник сигнала')
+        scan_actions = ttk.Frame(frame_scan, style='Card.TFrame')
+        scan_actions.pack(fill='x', pady=(0, 7))
+        scan_actions.columnconfigure(0, weight=1)
+        scan_actions.columnconfigure(1, weight=1)
+        ttk.Button(scan_actions, text='RGB-детектор', command=self.scan_rgb_detector,
+                   style='Small.TButton').grid(row=0, column=0, sticky='ew', padx=(0, 4), pady=(0, 4))
+        ttk.Button(scan_actions, text='USB-камера', command=self.scan_usb_cameras,
+                   style='Small.TButton').grid(row=0, column=1, sticky='ew', padx=(4, 0), pady=(0, 4))
+        ttk.Button(scan_actions, text='Сеть / RTSP', command=self.scan_network_cameras,
+                   style='Small.TButton').grid(row=1, column=0, columnspan=2, sticky='ew')
+
+        devices_box_frame = ttk.Frame(frame_scan, style='CardInset.TFrame', padding=3)
+        devices_box_frame.pack(fill='both', expand=True, pady=(0, 7))
+        self.devices_listbox = tk.Listbox(devices_box_frame, height=4, width=30, activestyle='none')
         self.devices_listbox.pack(side='left', fill='both', expand=True)
         scrollbar = ttk.Scrollbar(devices_box_frame, orient='vertical', command=self.devices_listbox.yview)
         scrollbar.pack(side='right', fill='y')
-        self.devices_listbox.config(yscrollcommand=scrollbar.set)
+        self.devices_listbox.configure(yscrollcommand=scrollbar.set)
         self.devices_listbox.bind('<<ListboxSelect>>', self.on_device_select)
         self.devices_listbox.bind('<Double-Button-1>', self.on_device_activate)
-        self.devices_label = ttk.Label(
-            frame_scan, text='Выбранное устройство: —', wraplength=270, style='CardMuted.TLabel'
-        )
-        self.devices_label.pack(fill='x')
+        self.devices_label = ttk.Label(frame_scan, text='Выбранное устройство: —',
+                                       wraplength=265, style='CardMuted.TLabel')
+        self.devices_label.pack(fill='x', pady=(0, 7))
+        ttk.Label(frame_scan, text='ИНДЕКС / URL / RTSP', style='Eyebrow.TLabel').pack(anchor='w', pady=(1, 4))
+        self.entry_source = ttk.Entry(frame_scan)
+        self.entry_source.insert(0, str(self.config.get('source', '0')))
+        self.entry_source.pack(fill='x', pady=(0, 6))
+        source_actions = ttk.Frame(frame_scan, style='Card.TFrame')
+        source_actions.pack(fill='x')
+        source_actions.columnconfigure(0, weight=1)
+        source_actions.columnconfigure(1, weight=1)
+        ttk.Button(source_actions, text='Применить', command=self.apply_source,
+                   style='Secondary.TButton').grid(row=0, column=0, sticky='ew', padx=(0, 3))
+        ttk.Button(source_actions, text='Переподключить', command=self.check_camera,
+                   style='Quiet.TButton').grid(row=0, column=1, sticky='ew', padx=(3, 0))
+        ttk.Button(frame_scan, text='Открыть видеофайл…', command=self.choose_video_file_and_analyze,
+                   style='Quiet.TButton').pack(fill='x', pady=(7, 0))
+        ttk.Separator(left, orient='horizontal').pack(fill='x', padx=12)
 
-        # Camera / stream source
-        frame_cam = make_card(left, 'Источник видео', 'Индекс камеры, локальный адрес или RTSP-ссылка.')
-        ttk.Label(frame_cam, text='URL или индекс устройства', style='CardMuted.TLabel').pack(anchor='w', pady=(0, 5))
-        self.entry_source = ttk.Entry(frame_cam)
-        self.entry_source.insert(0, self.config['source'])
-        self.entry_source.pack(fill='x', pady=(0, 8))
-        apply_frame = ttk.Frame(frame_cam, style='Card.TFrame')
-        apply_frame.pack(fill='x')
-        apply_frame.columnconfigure(0, weight=1)
-        apply_frame.columnconfigure(1, weight=1)
-        ttk.Button(apply_frame, text='Применить', command=self.apply_source,
-                   style='Secondary.TButton').grid(row=0, column=0, sticky='ew', padx=(0, 4))
-        ttk.Button(apply_frame, text='Переподключить', command=self.check_camera,
-                   style='Quiet.TButton').grid(row=0, column=1, sticky='ew', padx=(4, 0))
-
-        # Offline analysis remains available without changing the live path.
-        frame_file = make_card(left, 'Видео из файла', 'Офлайн-анализ с перемоткой и теми же параметрами RGB/SARA.')
-        ttk.Button(frame_file, text='Открыть видеофайл', command=self.choose_video_file_and_analyze,
-                   style='Quiet.TButton').pack(fill='x')
-
-        # ROI controls — all original variables and callbacks are preserved.
-        frame_roi = make_card(left, 'Область анализа (ROI)', 'Задайте геометрию вручную или передвигайте ROI прямо на кадре.')
-        self.var_x = tk.IntVar(value=300)
-        self.var_y = tk.IntVar(value=150)
-        self.var_w = tk.IntVar(value=200)
-        self.var_h = tk.IntVar(value=200)
+        # 02 — compact two-column ROI fields, with the same drag-on-preview flow.
+        frame_roi = make_section(left, '02', 'ИЗМЕРЕНИЕ', 'Область анализа')
+        self.var_x = tk.IntVar(value=int(self.config.get('roi_x', 300)))
+        self.var_y = tk.IntVar(value=int(self.config.get('roi_y', 150)))
+        self.var_w = tk.IntVar(value=int(self.config.get('roi_w', 200)))
+        self.var_h = tk.IntVar(value=int(self.config.get('roi_h', 200)))
         self.roi_shape_var = tk.StringVar(value=str(self.config.get('roi_shape', 'circle')))
-
         shape_frame = ttk.Frame(frame_roi, style='Card.TFrame')
-        shape_frame.pack(fill='x', pady=(0, 8))
-        ttk.Label(shape_frame, text='Форма', style='CardMuted.TLabel').pack(side='left', padx=(0, 7))
-        ttk.Radiobutton(shape_frame, text='Круг', variable=self.roi_shape_var, value='circle').pack(side='left', padx=(0, 4))
+        shape_frame.pack(fill='x', pady=(0, 7))
+        ttk.Radiobutton(shape_frame, text='Круг', variable=self.roi_shape_var, value='circle').pack(side='left', padx=(0, 6))
         ttk.Radiobutton(shape_frame, text='Прямоугольник', variable=self.roi_shape_var, value='rect').pack(side='left')
 
-        self.coord_label = ttk.Label(frame_roi, text='X: 0  Y: 0  W: 0  H: 0', style='CardMuted.TLabel')
-        self.coord_label.pack(fill='x', pady=(0, 5))
         vcmd = self.root.register(self.validate_roi_entry)
+        roi_grid = ttk.Frame(frame_roi, style='Card.TFrame')
+        roi_grid.pack(fill='x')
+        roi_grid.columnconfigure(0, weight=1, uniform='roi')
+        roi_grid.columnconfigure(1, weight=1, uniform='roi')
 
-        def create_spin_row(parent, label_text, var, min_val=0, max_val=1920):
-            row = ttk.Frame(parent, style='Card.TFrame')
-            row.pack(fill='x', pady=2)
-            ttk.Label(row, text=label_text, style='CardMuted.TLabel', width=9).pack(side='left')
-            ttk.Button(row, text='−', width=2, style='Small.TButton',
-                       command=lambda: self.adjust_value(var, -1, min_val, max_val)).pack(side='left', padx=(2, 3))
-            entry = ttk.Entry(row, width=7, justify='center', textvariable=var,
+        def create_spin_field(parent, row_num, col_num, label_text, var, min_val, max_val, delta=1):
+            field = ttk.Frame(parent, style='Card.TFrame')
+            field.grid(row=row_num, column=col_num, sticky='ew', padx=(0 if col_num == 0 else 7, 7 if col_num == 0 else 0), pady=4)
+            ttk.Label(field, text=label_text, style='CardMuted.TLabel').pack(anchor='w', pady=(0, 3))
+            controls = ttk.Frame(field, style='Card.TFrame')
+            controls.pack(fill='x')
+            ttk.Button(controls, text='−', width=2, style='Small.TButton',
+                       command=lambda: self.adjust_value(var, -delta, min_val, max_val)).pack(side='left')
+            entry = ttk.Entry(controls, width=6, justify='center', textvariable=var,
                               validate='key', validatecommand=(vcmd, '%P', str(min_val), str(max_val)))
-            entry.pack(side='left', padx=2)
-            ttk.Button(row, text='+', width=2, style='Small.TButton',
-                       command=lambda: self.adjust_value(var, 1, min_val, max_val)).pack(side='left', padx=(3, 0))
+            entry.pack(side='left', fill='x', expand=True, padx=3)
+            ttk.Button(controls, text='+', width=2, style='Small.TButton',
+                       command=lambda: self.adjust_value(var, delta, min_val, max_val)).pack(side='left')
             var.trace_add('write', lambda *args: self.update_coord_label())
-            return row
 
-        create_spin_row(frame_roi, 'X', self.var_x, 0, 1920)
-        create_spin_row(frame_roi, 'Y', self.var_y, 0, 1080)
-        create_spin_row(frame_roi, 'Ширина', self.var_w, 20, 1920)
-        create_spin_row(frame_roi, 'Высота', self.var_h, 20, 1080)
-
-        size_btn_frame = ttk.Frame(frame_roi, style='Card.TFrame')
-        size_btn_frame.pack(fill='x', pady=(8, 0))
-        ttk.Button(size_btn_frame, text='Увеличить', style='Small.TButton',
-                   command=lambda: self.change_roi_size(1.2)).pack(side='left', fill='x', expand=True, padx=(0, 3))
-        ttk.Button(size_btn_frame, text='Уменьшить', style='Small.TButton',
-                   command=lambda: self.change_roi_size(0.8)).pack(side='left', fill='x', expand=True, padx=3)
-        ttk.Button(size_btn_frame, text='Сбросить', style='Small.TButton',
-                   command=self.reset_roi).pack(side='left', fill='x', expand=True, padx=(3, 0))
+        create_spin_field(roi_grid, 0, 0, 'X · PX', self.var_x, 0, 1920)
+        create_spin_field(roi_grid, 0, 1, 'Y · PX', self.var_y, 0, 1080)
+        create_spin_field(roi_grid, 1, 0, 'Ширина', self.var_w, 20, 1920, 10)
+        create_spin_field(roi_grid, 1, 1, 'Высота', self.var_h, 20, 1080, 10)
+        self.coord_label = ttk.Label(frame_roi, text='X 0 · Y 0 · W 0 · H 0', style='CardMuted.TLabel')
+        self.coord_label.pack(anchor='w', pady=(6, 0))
+        roi_quick = ttk.Frame(frame_roi, style='Card.TFrame')
+        roi_quick.pack(fill='x', pady=(7, 0))
+        for label, factor in (('− 20%', 0.8), ('+ 20%', 1.2)):
+            ttk.Button(roi_quick, text=label, style='Small.TButton',
+                       command=lambda value=factor: self.change_roi_size(value)).pack(side='left', fill='x', expand=True, padx=(0, 4))
+        ttk.Button(roi_quick, text='Сброс', style='Small.TButton', command=self.reset_roi).pack(side='left', fill='x', expand=True)
         self.update_coord_label()
+        ttk.Separator(left, orient='horizontal').pack(fill='x', padx=12)
 
-        frame_save = make_card(left, 'Сохранение результатов', 'Ряды, метки и видео будут сохранены в выбранную папку.')
-        save_inner = ttk.Frame(frame_save, style='Card.TFrame')
-        save_inner.pack(fill='x')
-        self.entry_save_folder = ttk.Entry(save_inner)
-        self.entry_save_folder.insert(0, self.config['save_folder'])
-        self.entry_save_folder.pack(fill='x', pady=(0, 7))
-        ttk.Button(save_inner, text='Выбрать папку…', command=self.choose_save_folder,
-                   style='Quiet.TButton').pack(anchor='e')
+        # 03 — output destination; no duplicate explanation text.
+        frame_save = make_section(left, '03', 'РЕЗУЛЬТАТЫ', 'Сохранение сессии')
+        self.entry_save_folder = ttk.Entry(frame_save)
+        self.entry_save_folder.insert(0, self.config.get('save_folder', ''))
+        self.entry_save_folder.pack(fill='x', pady=(0, 6))
+        ttk.Button(frame_save, text='Выбрать папку…', command=self.choose_save_folder,
+                   style='Quiet.TButton').pack(fill='x')
+        ttk.Label(frame_save, text='CSV  ·  графики  ·  видео', style='Eyebrow.TLabel').pack(anchor='w', pady=(7, 0))
 
-        # The primary action is always visible, even when the control rail scrolls.
-        action_bar = ttk.Frame(left_outer, style='App.TFrame', padding=(0, 12, 0, 0))
+        action_bar = ttk.Frame(left_outer, style='Control.TFrame', padding=(12, 10, 12, 11))
         action_bar.pack(fill='x')
-        ttk.Button(action_bar, text='Запустить анализ', command=self.start_analysis,
+        ttk.Button(action_bar, text='▶   НАЧАТЬ АНАЛИЗ', command=self.start_analysis,
                    style='Primary.TButton').pack(fill='x')
-        ttk.Button(action_bar, text='Закрыть приложение', command=self.on_closing,
-                   style='Quiet.TButton').pack(fill='x', pady=(7, 0))
 
-        # Live monitoring workspace
+        # Central monitoring surface: live image first, history immediately below.
         right = ttk.Frame(main_body, style='App.TFrame')
-        right.pack(side='left', fill='both', expand=True, padx=(17, 0))
-        metrics = ttk.Frame(right, style='App.TFrame')
-        metrics.pack(fill='x', pady=(0, 13))
-
-        metric_defs = [
-            ('R', self.preview_r_var, 'R.TLabel', 'Среднее по ROI'),
-            ('G', self.preview_g_var, 'G.TLabel', 'Среднее по ROI'),
-            ('B', self.preview_b_var, 'B.TLabel', 'Среднее по ROI'),
-            ('Log10 (B/R)', self.preview_log_value_var, 'MetricName.TLabel', 'Цветовой индекс'),
-        ]
-        for column, (label, value_var, label_style, caption) in enumerate(metric_defs):
-            metrics.columnconfigure(column, weight=1, uniform='metric')
-            tile = ttk.Frame(metrics, style='Metric.TFrame', padding=(14, 10))
-            tile.grid(row=0, column=column, sticky='nsew', padx=(0 if column == 0 else 7, 7 if column < 3 else 0))
-            ttk.Label(tile, text=label, style=label_style).pack(anchor='w')
-            ttk.Label(tile, textvariable=value_var, style='MetricValue.TLabel').pack(anchor='w', pady=(2, 0))
-            ttk.Label(tile, text=caption, style='CardMuted.TLabel').pack(anchor='w', pady=(1, 0))
-
+        right.pack(side='left', fill='both', expand=True, padx=(13, 0))
         content = ttk.Frame(right, style='App.TFrame')
         content.pack(fill='both', expand=True)
 
-        frame_prev = ttk.Frame(content, style='Card.TFrame', padding=13)
+        frame_prev = ttk.Frame(content, style='Card.TFrame', padding=10)
         frame_prev.pack(side='left', fill='both', expand=True)
         preview_header = ttk.Frame(frame_prev, style='Card.TFrame')
-        preview_header.pack(fill='x', pady=(0, 10))
+        preview_header.pack(fill='x', pady=(0, 8))
         preview_copy = ttk.Frame(preview_header, style='Card.TFrame')
         preview_copy.pack(side='left', fill='x', expand=True)
-        ttk.Label(preview_copy, text='Видеопоток', style='CardTitle.TLabel').pack(anchor='w')
-        ttk.Label(preview_copy, text='Перетаскивайте контур, чтобы точно задать ROI.',
-                  style='CardMuted.TLabel').pack(anchor='w', pady=(3, 0))
-        ttk.Label(preview_header, text='ROI активна', style='OnlineBadge.TLabel').pack(side='right')
+        ttk.Label(preview_copy, text='A  /  CAPTURE', style='Eyebrow.TLabel').pack(anchor='w')
+        ttk.Label(preview_copy, text='Видеопоток', style='CardTitle.TLabel').pack(anchor='w', pady=(2, 0))
+        self.preview_spec_label = ttk.Label(preview_header, text='RGB  ·  LIVE INPUT', style='CardMuted.TLabel')
+        self.preview_spec_label.pack(side='right', padx=(6, 0))
         self.preview_label = ttk.Label(frame_prev, style='Preview.TLabel', anchor='center')
         self.preview_label.pack(fill='both', expand=True)
         self.preview_label.bind('<ButtonPress-1>', self.on_preview_mouse_down)
@@ -730,46 +716,74 @@ class SetupApp:
         self.preview_label.bind('<ButtonRelease-1>', self.on_preview_mouse_up)
         self.preview_label.bind('<Motion>', self.on_preview_mouse_hover)
 
-        # Signal detail rail
-        aside = ttk.Frame(content, width=306, style='App.TFrame')
-        aside.pack(side='right', fill='y', padx=(13, 0))
-        aside.pack_propagate(False)
-
-        frame_rgb = ttk.Frame(aside, style='Card.TFrame', padding=13)
-        frame_rgb.pack(fill='x', pady=(0, 11))
-        ttk.Label(frame_rgb, text='Динамика RGB', style='CardTitle.TLabel').pack(anchor='w')
-        ttk.Label(frame_rgb, text='Последние измерения ROI · шкала 0–300',
-                  style='CardMuted.TLabel').pack(anchor='w', pady=(3, 10))
-        rgb_info = ttk.Frame(frame_rgb, style='Card.TFrame')
-        rgb_info.pack(fill='x', pady=(0, 9))
-        self.preview_color_canvas = tk.Canvas(
-            rgb_info, width=58, height=32, bg='#F8FAF9',
-            highlightthickness=1, highlightbackground='#DEE7E3'
-        )
-        self.preview_color_canvas.pack(side='left', padx=(0, 9))
-        ttk.Label(rgb_info, text='Средний цвет ROI', style='CardMuted.TLabel').pack(side='left', anchor='center')
-        ttk.Label(frame_rgb, textvariable=self.preview_log_var, style='CardMuted.TLabel').pack(anchor='w', pady=(0, 7))
-        self.preview_rgb_canvas = tk.Canvas(frame_rgb, height=205, highlightthickness=1)
+        frame_chart = ttk.Frame(right, style='Card.TFrame', padding=(10, 8, 10, 9))
+        frame_chart.pack(fill='x', pady=(10, 0))
+        chart_header = ttk.Frame(frame_chart, style='Card.TFrame')
+        chart_header.pack(fill='x', pady=(0, 6))
+        ttk.Label(chart_header, text='B  /  LIVE DATA', style='Eyebrow.TLabel').pack(side='left')
+        ttk.Label(chart_header, text='История сигнала', style='CardTitle.TLabel').pack(side='left', padx=(8, 0))
+        legend = ttk.Frame(chart_header, style='Card.TFrame')
+        legend.pack(side='right')
+        for code, label_style in (('● R', 'R.TLabel'), ('● G', 'G.TLabel'), ('● B', 'B.TLabel')):
+            ttk.Label(legend, text=code, style=label_style).pack(side='left', padx=(0, 8))
+        self.preview_rgb_canvas = tk.Canvas(frame_chart, height=165, highlightthickness=1)
         self.preview_rgb_canvas.pack(fill='x')
-        legend = ttk.Frame(frame_rgb, style='Card.TFrame')
-        legend.pack(fill='x', pady=(9, 0))
-        for code, label_style in (('R', 'R.TLabel'), ('G', 'G.TLabel'), ('B', 'B.TLabel')):
-            ttk.Label(legend, text=f'● {code}', style=label_style).pack(side='left', padx=(0, 12))
 
-        frame_roi_info = ttk.Frame(aside, style='Card.TFrame', padding=13)
-        frame_roi_info.pack(fill='x')
-        ttk.Label(frame_roi_info, text='Геометрия ROI', style='CardTitle.TLabel').pack(anchor='w')
-        ttk.Label(frame_roi_info, text='Активная область подсвечивается поверх видеопотока. Координаты и размер можно менять в левой панели или перетаскиванием рамки.',
-                  style='CardMuted.TLabel', wraplength=265, justify='left').pack(anchor='w', pady=(5, 0))
+        # A narrow readout rail avoids a stack of redundant metric cards.
+        aside = ttk.Frame(content, width=256, style='Card.TFrame', padding=(13, 12))
+        aside.pack(side='right', fill='y', padx=(11, 0))
+        aside.pack_propagate(False)
+        ttk.Label(aside, text='ROI / READOUT', style='Eyebrow.TLabel').pack(anchor='w')
+        ttk.Label(aside, text='Показатели', style='CardTitle.TLabel').pack(anchor='w', pady=(3, 10))
+        metric_rows = (
+            ('R', self.preview_r_var, 'R.TLabel'),
+            ('G', self.preview_g_var, 'G.TLabel'),
+            ('B', self.preview_b_var, 'B.TLabel'),
+        )
+        for code, value_var, value_style in metric_rows:
+            row = ttk.Frame(aside, style='Card.TFrame', padding=(0, 8))
+            row.pack(fill='x')
+            ttk.Separator(row, orient='horizontal').pack(side='top', fill='x', pady=(0, 7))
+            ttk.Label(row, text=code, style=value_style, width=3).pack(side='left')
+            ttk.Label(row, textvariable=value_var, style='MetricValue.TLabel').pack(side='left')
+            ttk.Label(row, text='MEAN', style='Eyebrow.TLabel').pack(side='right', anchor='s', pady=(0, 3))
+        ttk.Separator(aside, orient='horizontal').pack(fill='x', pady=(6, 10))
+        ttk.Label(aside, text='LOG10 (B / R)', style='Eyebrow.TLabel').pack(anchor='w')
+        ttk.Label(aside, textvariable=self.preview_log_value_var,
+                  style='MetricValue.TLabel').pack(anchor='w', pady=(3, 10))
+        color_row = ttk.Frame(aside, style='Card.TFrame')
+        color_row.pack(fill='x', pady=(0, 11))
+        self.preview_color_canvas = tk.Canvas(color_row, width=48, height=28, highlightthickness=1)
+        self.preview_color_canvas.pack(side='left', padx=(0, 8))
+        ttk.Label(color_row, text='Средний цвет ROI', style='CardMuted.TLabel', wraplength=135).pack(side='left', anchor='center')
+        ttk.Separator(aside, orient='horizontal').pack(fill='x', pady=(0, 10))
+        ttk.Label(aside, text='ROI / GEOMETRY', style='Eyebrow.TLabel').pack(anchor='w')
+        ttk.Label(aside, text='Активная область', style='CardTitle.TLabel').pack(anchor='w', pady=(3, 5))
+        ttk.Label(aside, textvariable=self.preview_rgb_var, style='CardMuted.TLabel').pack(anchor='w')
+        ttk.Label(aside, text='Перемещайте контур на изображении или редактируйте координаты слева.',
+                  style='CardMuted.TLabel', wraplength=215, justify='left').pack(anchor='w', pady=(8, 0))
 
-        # Native Tk widgets need explicit colors; applying a second time avoids
-        # first-launch platform defaults flashing through the custom surface.
         try:
             self._apply_start_theme()
         except Exception:
             pass
-
         self.root.after(200, self.auto_connect_startup_camera)
+
+    def _draw_brand_mark(self):
+        canvas = getattr(self, 'brand_canvas', None)
+        if canvas is None:
+            return
+        colors = getattr(self, '_ui_palette', get_palette(False))
+        canvas.configure(bg=colors['surface'])
+        canvas.delete('all')
+        canvas.create_rectangle(2, 2, 36, 36, fill=colors['surface_alt'], outline=colors['border'], width=1)
+        accent = colors['accent']
+        canvas.create_line(9, 10, 28, 10, fill=accent, width=2)
+        canvas.create_line(9, 10, 9, 28, fill=accent, width=2)
+        canvas.create_line(9, 19, 22, 19, fill=accent, width=2)
+        canvas.create_line(9, 28, 28, 28, fill=accent, width=2)
+        canvas.create_line(12, 23, 16, 23, 18, 16, 21, 25, 24, 19, 27, 19,
+                          fill=colors['text'], width=1)
 
     def auto_connect_startup_camera(self):
         """Автоматически сканирует USB-камеры при запуске и подключает первую доступную рабочую камеру с видеопотоком."""
@@ -854,7 +868,7 @@ class SetupApp:
         y = self.safe_get_int(self.var_y, 0)
         w = self.safe_get_int(self.var_w, self.MIN_ROI_SIZE)
         h = self.safe_get_int(self.var_h, self.MIN_ROI_SIZE)
-        self.coord_label.config(text=f"📍 X: {x}  Y: {y}  W: {w}  H: {h}")
+        self.coord_label.config(text=f"ROI · X {x} / Y {y} / {w} × {h} px")
 
     def choose_save_folder(self):
         folder = filedialog.askdirectory(title="Выберите папку для сохранения результатов")
@@ -1630,7 +1644,7 @@ class SetupApp:
         if canvas is None:
             return
         try:
-            colors = getattr(self, '_ui_palette', get_palette(bool(self.config.get('light_theme', True))))
+            colors = getattr(self, '_ui_palette', get_palette(bool(self.config.get('light_theme', False))))
             canvas.delete('all')
             w = max(200, int(canvas.winfo_width()))
             h = max(100, int(canvas.winfo_height()))
@@ -1810,72 +1824,103 @@ class SetupApp:
 
     def _render_empty_preview_placeholder(self):
         try:
-            pw = max(320, self.preview_label.winfo_width())
-            ph = max(240, self.preview_label.winfo_height())
+            pw = max(320, int(self.preview_label.winfo_width()))
+            ph = max(240, int(self.preview_label.winfo_height()))
             if pw <= 1:
-                pw = 800
+                pw = 900
             if ph <= 1:
-                ph = 500
+                ph = 520
 
-            colors = getattr(self, '_ui_palette', get_palette(bool(self.config.get('light_theme', True))))
+            colors = getattr(self, '_ui_palette', get_palette(bool(self.config.get('light_theme', False))))
+            source = str(self.entry_source.get()).strip() if hasattr(self, 'entry_source') else ''
+            roi_width = self.safe_get_int(self.var_w, 200)
+            roi_height = self.safe_get_int(self.var_h, 200)
+            cache_key = (pw, ph, bool(self.config.get('light_theme', False)), source, roi_width, roi_height)
+            cached_image = getattr(self, '_empty_preview_photo', None)
+            if cache_key == getattr(self, '_empty_preview_key', None) and cached_image is not None:
+                self.preview_label.imgtk = cached_image
+                self.preview_label.configure(image=cached_image)
+                return
 
             def rgb(hex_color):
                 value = str(hex_color).lstrip('#')
                 return tuple(int(value[index:index + 2], 16) for index in (0, 2, 4))
 
-            img = Image.new('RGB', (pw, ph), color=rgb(colors['video_background']))
+            bg = rgb(colors['video_background'])
+            accent = rgb(colors['accent'])
+            muted = rgb(colors['muted'])
+            grid = rgb(colors['chart_grid'])
+            text = rgb(colors['text'])
+            border = rgb(colors['border'])
+            img = Image.new('RGB', (pw, ph), color=bg)
+
+            # Faint radial instrument glow, plus a restrained coordinate grid.
+            glow = Image.new('RGBA', (pw, ph), (0, 0, 0, 0))
+            glow_draw = ImageDraw.Draw(glow)
+            cx, cy = pw // 2, ph // 2 - 15
+            for radius, alpha in ((190, 3), (140, 4), (90, 5)):
+                glow_draw.ellipse((cx - radius, cy - radius, cx + radius, cy + radius),
+                                  fill=(*accent, alpha))
+            img = Image.alpha_composite(img.convert('RGBA'), glow).convert('RGB')
             draw = ImageDraw.Draw(img)
-            font_title = _get_unicode_font(16, bold=True)
-            font_body = _get_unicode_font(12, bold=False)
-            font_hint = _get_unicode_font(11, bold=False)
+            step = 48
+            for gx in range(0, pw, step):
+                draw.line((gx, 0, gx, ph), fill=grid, width=1)
+            for gy in range(0, ph, step):
+                draw.line((0, gy, pw, gy), fill=grid, width=1)
 
-            cx, cy = pw // 2, ph // 2
-            card_w = min(max(0, pw - 40), 680)
-            card_h = min(max(0, ph - 40), 255)
-            x0, y0 = cx - card_w // 2, cy - card_h // 2
-            x1, y1 = x0 + card_w, y0 + card_h
-            draw.rounded_rectangle(
-                [x0, y0, x1, y1], radius=16,
-                fill=rgb(colors['surface']), outline=rgb(colors['border']), width=1
-            )
+            # Framing marks turn the blank frame into a quiet capture instrument.
+            inset = 15
+            arm = 18
+            for x_sign, y_sign in ((1, 1), (-1, 1), (1, -1), (-1, -1)):
+                x = inset if x_sign > 0 else pw - inset
+                y = inset if y_sign > 0 else ph - inset
+                draw.line((x, y, x + arm * x_sign, y), fill=border, width=1)
+                draw.line((x, y, x, y + arm * y_sign), fill=border, width=1)
 
-            # A small, quiet signal glyph anchors the empty state without competing
-            # with the live image once a camera is connected.
-            draw.rounded_rectangle(
-                [x0 + 22, y0 + 20, x0 + 54, y0 + 52], radius=9,
-                fill=rgb(colors['accent_soft'])
-            )
-            draw.ellipse([x0 + 32, y0 + 30, x0 + 44, y0 + 42], fill=rgb(colors['accent']))
-            draw.text((x0 + 68, y0 + 20), 'Видеопоток ожидает источник',
-                      font=font_title, fill=rgb(colors['text']))
-            draw.text((x0 + 68, y0 + 48), f"Текущий источник: {self.entry_source.get().strip() or 'не выбран'}",
-                      font=font_hint, fill=rgb(colors['muted']))
+            font_kicker = _get_unicode_font(9, bold=True)
+            font_title = _get_unicode_font(20, bold=True)
+            font_body = _get_unicode_font(11, bold=False)
+            font_mono = _get_unicode_font(9, bold=False)
 
-            hints = [
-                'Выберите MiiCam или USB-камеру в списке слева, затем примените источник.',
-                'Для сетевой камеры откройте список IP-устройств и подключитесь по адресу RTSP.',
-                'Можно открыть локальное видео — анализ начнётся в отдельном окне.',
-            ]
-            y = y0 + 91
-            max_chars = max(38, min(78, (card_w - 56) // 8))
-            for index, hint in enumerate(hints, start=1):
-                draw.ellipse([x0 + 25, y + 4, x0 + 31, y + 10], fill=rgb(colors['accent']))
-                wrapped = textwrap.wrap(hint, width=max_chars) or [hint]
-                for line in wrapped:
-                    draw.text((x0 + 43, y), line, font=font_body, fill=rgb(colors['muted']))
-                    y += 22
-                y += 8
+            # Central optical reticle.
+            ring = 31
+            draw.ellipse((cx - ring, cy - ring, cx + ring, cy + ring), outline=border, width=1)
+            draw.ellipse((cx - 20, cy - 20, cx + 20, cy + 20), outline=accent, width=1)
+            draw.ellipse((cx - 4, cy - 4, cx + 4, cy + 4), fill=accent)
+            draw.line((cx - 51, cy, cx - 28, cy), fill=border, width=1)
+            draw.line((cx + 28, cy, cx + 51, cy), fill=border, width=1)
+            draw.line((cx, cy - 51, cx, cy - 28), fill=border, width=1)
+            draw.line((cx, cy + 28, cx, cy + 51), fill=border, width=1)
+            draw.ellipse((cx - 2, cy - 2, cx + 2, cy + 2), fill=text)
 
-            draw.text((x0 + 24, y1 - 29), 'Перетащите ROI по кадру после подключения камеры',
-                      font=font_hint, fill=rgb(colors['accent']))
+            label = 'INPUT 01  /  SARA RGB CAPTURE'
+            box = draw.textbbox((0, 0), label, font=font_kicker)
+            draw.text((cx - (box[2] - box[0]) / 2, cy + 54), label, font=font_kicker, fill=accent)
+            title = 'Источник не подключён'
+            box = draw.textbbox((0, 0), title, font=font_title)
+            title_y = cy + 76
+            draw.text((cx - (box[2] - box[0]) / 2, title_y), title, font=font_title, fill=text)
+            hint = 'Выберите камеру слева или укажите адрес видеопотока'
+            box = draw.textbbox((0, 0), hint, font=font_body)
+            draw.text((cx - (box[2] - box[0]) / 2, title_y + 31), hint, font=font_body, fill=muted)
+
+            source = str(self.entry_source.get()).strip() if hasattr(self, 'entry_source') else ''
+            source_text = f'SOURCE  {source or "—"}'
+            draw.text((inset + 3, inset + 4), source_text, font=font_mono, fill=muted)
+            draw.text((pw - inset - 95, inset + 4), 'STANDBY  ·  0 FPS', font=font_mono, fill=muted)
+            roi_text = f'ROI  {self.safe_get_int(self.var_w, 200)} × {self.safe_get_int(self.var_h, 200)} PX'
+            draw.text((inset + 3, ph - inset - 16), roi_text, font=font_mono, fill=accent)
+            draw.text((pw - inset - 112, ph - inset - 16), 'AWAITING SIGNAL', font=font_mono, fill=muted)
 
             imgtk = ImageTk.PhotoImage(image=img)
+            self._empty_preview_key = cache_key
+            self._empty_preview_photo = imgtk
             self.preview_label.imgtk = imgtk
             self.preview_label.configure(image=imgtk)
         except Exception:
             pass
 
-                                          
     def start_analysis(self):
         # Проверка статуса лицензии и пробного периода
         status = self.lic_mgr.get_status()

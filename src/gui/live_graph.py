@@ -53,6 +53,7 @@ class LiveGraphWindow:
         self.QtCore = QtCore
         self.QtGui = QtGui
         self.theme_mode = theme_mode if theme_mode in ("dark", "light") else "dark"
+        self._theme_colors = get_palette(self.theme_mode == 'light')
         self.custom_graph_defs = list(custom_graphs or [])
         self.custom_graphs = []
         self.is_video_file = bool(is_video_file)
@@ -392,9 +393,9 @@ class LiveGraphWindow:
         self.plot.setLabel('bottom', 'Time', units='MS')
         self.plot.setYRange(RGB_Y_MIN, RGB_Y_MAX)
         self.plot.setLimits(yMin=RGB_Y_MIN, yMax=RGB_Y_MAX)
-        self.r_curve = self.plot.plot(pen=pg.mkPen('r', width=2))
-        self.g_curve = self.plot.plot(pen=pg.mkPen('g', width=2))
-        self.b_curve = self.plot.plot(pen=pg.mkPen('b', width=2))
+        self.r_curve = self.plot.plot(pen=pg.mkPen(self._theme_colors['channel_r'], width=2))
+        self.g_curve = self.plot.plot(pen=pg.mkPen(self._theme_colors['channel_g'], width=2))
+        self.b_curve = self.plot.plot(pen=pg.mkPen(self._theme_colors['channel_b'], width=2))
         self._register_graph_widget('RGB', self.plot_widget)
 
                                   
@@ -410,8 +411,8 @@ class LiveGraphWindow:
         self.rgb_sum_slope_plot.setLabel('left', 'd(R+G+B)/dt')
         self.rgb_sum_slope_plot.setLabel('bottom', 'Time', units='MS')
         self._rgb_sum_slope30_y_min, self._rgb_sum_slope30_y_max = -2.0, 2.0
-        self.rgb_sum_slope_curve = self.rgb_sum_slope_plot.plot(pen=pg.mkPen(ELUTEK_SUCCESS, width=2.2))
-        self.rgb_sum_slope_zero_line = self.pg.InfiniteLine(pos=0, angle=0, pen=pg.mkPen((198, 205, 225, 95), width=1))
+        self.rgb_sum_slope_curve = self.rgb_sum_slope_plot.plot(pen=pg.mkPen(self._theme_colors['success'], width=2.2))
+        self.rgb_sum_slope_zero_line = self.pg.InfiniteLine(pos=0, angle=0, pen=pg.mkPen(self._theme_colors['muted'], width=1))
         self.rgb_sum_slope_plot.addItem(self.rgb_sum_slope_zero_line)
         self._register_graph_widget('RGB_sum_slope_30s', self.rgb_sum_slope_plot_widget)
         # Direct range sync used
@@ -429,10 +430,10 @@ class LiveGraphWindow:
         self.transition_score_plot.setLabel('left', 'score')
         self.transition_score_plot.setLabel('bottom', 'Time', units='MS')
         self._transition_score_y_min, self._transition_score_y_max = 0.0, 10.0
-        self.transition_score_curve = self.transition_score_plot.plot(pen=pg.mkPen('#DDAE6B', width=2.2))
-        self.transition_score_line_warn = self.pg.InfiniteLine(pos=3, angle=0, pen=pg.mkPen((198, 205, 225, 95), width=1))
-        self.transition_score_line_prob = self.pg.InfiniteLine(pos=5, angle=0, pen=pg.mkPen((221, 174, 107, 130), width=1))
-        self.transition_score_line_strong = self.pg.InfiniteLine(pos=8, angle=0, pen=pg.mkPen((185, 74, 85, 160), width=1.5))
+        self.transition_score_curve = self.transition_score_plot.plot(pen=pg.mkPen(self._theme_colors['warning'], width=2.2))
+        self.transition_score_line_warn = self.pg.InfiniteLine(pos=3, angle=0, pen=pg.mkPen(self._theme_colors['muted'], width=1))
+        self.transition_score_line_prob = self.pg.InfiniteLine(pos=5, angle=0, pen=pg.mkPen(self._theme_colors['warning'], width=1))
+        self.transition_score_line_strong = self.pg.InfiniteLine(pos=8, angle=0, pen=pg.mkPen(self._theme_colors['danger'], width=1.5))
         self.transition_score_plot.addItem(self.transition_score_line_warn)
         self.transition_score_plot.addItem(self.transition_score_line_prob)
         self.transition_score_plot.addItem(self.transition_score_line_strong)
@@ -456,7 +457,7 @@ class LiveGraphWindow:
         self.log_plot.setLabel('left', 'Log10(B/R)')
         self.log_plot.setLabel('bottom', 'Time', units='MS')
         self._log_br_y_min, self._log_br_y_max = -1.0, 1.0
-        self.log_curve = self.log_plot.plot(pen=pg.mkPen('#FFAA33', width=2.5))
+        self.log_curve = self.log_plot.plot(pen=pg.mkPen(self._theme_colors['accent'], width=2.2))
 
         self.time_axis_log_bg = pg.AxisItem(orientation='bottom')
         self.time_axis_log_bg.tickStrings = self._format_time_ticks
@@ -469,7 +470,7 @@ class LiveGraphWindow:
         self.log_bg_plot.setLabel('left', 'Log10(B/G)')
         self.log_bg_plot.setLabel('bottom', 'Time', units='MS')
         self._log_bg_y_min, self._log_bg_y_max = -1.0, 1.0
-        self.log_bg_curve = self.log_bg_plot.plot(pen=pg.mkPen('#66CCFF', width=2.5))
+        self.log_bg_curve = self.log_bg_plot.plot(pen=pg.mkPen(self._theme_colors['channel_b'], width=2.2))
 
         self._apply_log_y_ranges()
         self._register_graph_widget('Log10(B/R)', self.log_plot_widget, kind='log')
@@ -1182,21 +1183,21 @@ class LiveGraphWindow:
                 QMainWindow, QWidget#ElutekCentral {{ background: {bg}; color: {fg}; }}
                 QWidget {{ font-family: 'Segoe UI'; font-size: 9pt; }}
                 QLabel {{ color: {fg}; font-family: 'Segoe UI', Arial; font-size: 9pt; }}
-                QFrame#toolbarPanel {{ background: {panel}; border: 1px solid {border}; border-radius: 12px; }}
-                QFrame#toolGroup {{ background: {panel_alt}; border: 1px solid {border}; border-radius: 9px; }}
-                QLabel#toolbarBrandMark {{ background: {accent}; color: {colors['accent_on']}; border-radius: 9px; font-size: 14pt; font-weight: 800; }}
+                QFrame#toolbarPanel {{ background: {panel}; border: 1px solid {border}; border-radius: 7px; }}
+                QFrame#toolGroup {{ background: {panel_alt}; border: 1px solid {border}; border-radius: 5px; }}
+                QLabel#toolbarBrandMark {{ background: {accent}; color: {colors['accent_on']}; border-radius: 5px; font-size: 14pt; font-weight: 800; }}
                 QLabel#toolbarTitle {{ font-size: 12pt; font-weight: 750; }}
                 QLabel#toolbarSubtitle {{ color: {colors['muted']}; font-size: 8pt; }}
                 QLabel#toolGroupLabel {{ color: {colors['muted']}; font-size: 7pt; font-weight: 750; padding: 0 3px; }}
-                QLabel#pointsBadge {{ background: {colors['accent_soft']}; color: {accent}; border-radius: 7px; padding: 7px 10px; font-weight: 700; }}
-                QPushButton {{ background: {panel}; color: {fg}; border: 1px solid {border}; border-radius: 8px; padding: 7px 11px; font-size: 9pt; font-weight: 600; }}
+                QLabel#pointsBadge {{ background: {colors['accent_soft']}; color: {accent}; border-radius: 4px; padding: 7px 10px; font-weight: 700; }}
+                QPushButton {{ background: {panel}; color: {fg}; border: 1px solid {border}; border-radius: 5px; padding: 7px 11px; font-size: 9pt; font-weight: 600; }}
                 QPushButton:hover {{ background: {colors['surface_hover']}; border-color: {accent}; }}
                 QPushButton:checked {{ background: {colors['accent_soft']}; color: {accent}; border: 1px solid {accent}; }}
                 QPushButton#dangerButton {{ background: {colors['danger_soft']}; color: {colors['danger']}; border: 1px solid {colors['danger_soft']}; font-weight: 700; }}
                 QPushButton#dangerButton:hover {{ background: {colors['danger']}; color: {colors['danger_on']}; }}
-                QLabel#transitionAlert {{ background: {colors['danger']}; color: {colors['danger_on']}; border: 1px solid {colors['danger']}; border-radius: 12px; padding: 11px 20px; font-size: 14pt; font-weight: 800; }}
+                QLabel#transitionAlert {{ background: {colors['danger']}; color: {colors['danger_on']}; border: 1px solid {colors['danger']}; border-radius: 7px; padding: 11px 20px; font-size: 14pt; font-weight: 800; }}
                 QLabel#transitionAlert:hover {{ background: {colors['danger_hover']}; border-color: {colors['danger_hover']}; }}
-                QFrame#transitionStatusPanel {{ background: {panel}; border: 1px solid {border}; border-radius: 12px; }}
+                QFrame#transitionStatusPanel {{ background: {panel}; border: 1px solid {border}; border-radius: 7px; }}
                 QLabel#transitionStatusHeader {{ color: {fg}; font-weight: 800; }}
                 QLabel#transitionStatusLine {{ color: {fg}; font-weight: 600; }}
                 QLabel#transitionStatusLine[state="active"] {{ color: {accent}; font-weight: 800; }}
@@ -1206,9 +1207,9 @@ class LiveGraphWindow:
                 QScrollArea#graphScroll {{ background: {bg}; border: none; }}
                 QDialog {{ background: {bg}; color: {fg}; }}
                 QDialog QLabel, QGroupBox, QRadioButton, QListWidget, QListWidget::item {{ color: {fg}; }}
-                QGroupBox {{ background: {panel}; border: 1px solid {border}; border-radius: 8px; margin-top: 10px; padding: 8px 10px 10px; }}
+                QGroupBox {{ background: {panel}; border: 1px solid {border}; border-radius: 5px; margin-top: 10px; padding: 8px 10px 10px; }}
                 QGroupBox::title {{ color: {fg}; subcontrol-origin: margin; left: 10px; padding: 0 5px; }}
-                QLineEdit, QTextEdit, QListWidget, QComboBox, QSpinBox, QDoubleSpinBox {{ background: {panel_alt}; color: {fg}; border: 1px solid {border}; border-radius: 7px; padding: 6px 8px; selection-background-color: {colors['accent_soft']}; selection-color: {fg}; }}
+                QLineEdit, QTextEdit, QListWidget, QComboBox, QSpinBox, QDoubleSpinBox {{ background: {panel_alt}; color: {fg}; border: 1px solid {border}; border-radius: 4px; padding: 6px 8px; selection-background-color: {colors['accent_soft']}; selection-color: {fg}; }}
                 QListWidget {{ alternate-background-color: {panel}; }}
                 QScrollBar:vertical {{ background: {bg}; width: 8px; margin: 0px; border: none; border-radius: 4px; }}
                 QScrollBar::handle:vertical {{ background: {colors['muted']}; border-radius: 4px; min-height: 25px; }}
@@ -1223,7 +1224,7 @@ class LiveGraphWindow:
 
             if hasattr(self, 'cursor_hud') and self.cursor_hud is not None:
                 self.cursor_hud.setStyleSheet(
-                    f"QFrame#cursorHud {{ background-color: {panel_alt}; border: 1px solid {border}; border-radius: 8px; padding: 2px 10px; }}"
+                    f"QFrame#cursorHud {{ background-color: {panel_alt}; border: 1px solid {border}; border-radius: 5px; padding: 2px 10px; }}"
                 )
                 if hasattr(self, 'cursor_hud_label') and self.cursor_hud_label is not None:
                     self.cursor_hud_label.setStyleSheet(
@@ -2999,7 +3000,7 @@ class LiveGraphWindow:
 
         self._stop_confirm_deadline = now + 5.0
         self.stop_btn.setText('Нажмите ещё раз для остановки')
-        self.stop_btn.setStyleSheet(f'background-color: {get_palette(self.theme_mode == "light")["warning"]}; color: {get_palette(self.theme_mode == "light")["accent_on"]}; font-weight: bold; border: none; border-radius: 8px;')
+        self.stop_btn.setStyleSheet(f'background-color: {get_palette(self.theme_mode == "light")["warning"]}; color: {get_palette(self.theme_mode == "light")["accent_on"]}; font-weight: bold; border: none; border-radius: 5px;')
         self._show_toast('Для остановки нажмите STOP ещё раз в течение 5 секунд')
         self.QtCore.QTimer.singleShot(5200, self._reset_stop_button_if_needed)
 
@@ -3009,7 +3010,7 @@ class LiveGraphWindow:
         if time.time() > self._stop_confirm_deadline:
             self._stop_confirm_deadline = 0.0
             self.stop_btn.setText('Остановить')
-            self.stop_btn.setStyleSheet(f'background-color: {get_palette(self.theme_mode == "light")["danger"]}; color: {get_palette(self.theme_mode == "light")["danger_on"]}; font-weight: bold; border: none; border-radius: 8px;')
+            self.stop_btn.setStyleSheet(f'background-color: {get_palette(self.theme_mode == "light")["danger"]}; color: {get_palette(self.theme_mode == "light")["danger_on"]}; font-weight: bold; border: none; border-radius: 5px;')
 
     def take_video_resize_request(self):
         factor = self._video_resize_request
@@ -3052,10 +3053,10 @@ class LiveGraphWindow:
             if hasattr(self, 'player_play_btn'):
                 if is_paused:
                     self.player_play_btn.setText('▶ СТАРТ')
-                    self.player_play_btn.setStyleSheet(f'background-color: {get_palette(self.theme_mode == "light")["success_soft"]}; color: {get_palette(self.theme_mode == "light")["success"]}; font-weight: bold; border: none; border-radius: 8px;')
+                    self.player_play_btn.setStyleSheet(f'background-color: {get_palette(self.theme_mode == "light")["success_soft"]}; color: {get_palette(self.theme_mode == "light")["success"]}; font-weight: bold; border: none; border-radius: 5px;')
                 else:
                     self.player_play_btn.setText('⏸ ПАУЗА')
-                    self.player_play_btn.setStyleSheet(f'background-color: {get_palette(self.theme_mode == "light")["warning_soft"]}; color: {get_palette(self.theme_mode == "light")["warning"]}; font-weight: bold; border: none; border-radius: 8px;')
+                    self.player_play_btn.setStyleSheet(f'background-color: {get_palette(self.theme_mode == "light")["warning_soft"]}; color: {get_palette(self.theme_mode == "light")["warning"]}; font-weight: bold; border: none; border-radius: 5px;')
 
             if hasattr(self, 'player_speed_combo'):
                 for idx in range(self.player_speed_combo.count()):

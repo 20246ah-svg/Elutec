@@ -42,7 +42,7 @@ class LicenseDialog:
             style.theme_use('clam')
         except Exception:
             pass
-        light = bool(self.config.get('light_theme', True))
+        light = bool(self.config.get('light_theme', False))
         colors = get_palette(light)
         bg = colors['background']
         panel = colors['surface']
