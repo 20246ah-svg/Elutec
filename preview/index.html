@@ -1,0 +1,312 @@
+<!doctype html>
+<html lang="ru">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="theme-color" content="#f3f6f5">
+  <title>Элютек · SARA RGB — предпросмотр интерфейса</title>
+  <link rel="stylesheet" href="styles.css">
+</head>
+<body>
+  <div class="app-shell">
+    <header class="topbar">
+      <div class="brand-lockup">
+        <div class="brand-mark" aria-hidden="true">E</div>
+        <div>
+          <div class="brand-title">Элютек <span>·</span> SARA RGB</div>
+          <div class="brand-subtitle">Визуально-оптический контроль фракционирования</div>
+        </div>
+      </div>
+      <div class="topbar-actions">
+        <span class="preview-label"><span class="preview-dot"></span> Концепция интерфейса</span>
+        <button class="button button-quiet" id="theme-toggle" type="button" aria-label="Переключить тему">Тёмная тема</button>
+        <button class="button button-quiet" id="license-open" type="button">Лицензия <span class="button-chevron">↗</span></button>
+        <button class="button button-soft" id="settings-open" type="button"><span class="button-icon">⚙</span> Настройки</button>
+      </div>
+    </header>
+
+    <main class="app-main">
+      <section class="page-heading">
+        <div>
+          <p class="eyebrow">ELUTEK LAB · МОНИТОРИНГ</p>
+          <h1>Рабочее пространство</h1>
+          <p class="page-description">Подключите источник, проверьте область ROI и запускайте анализ.</p>
+        </div>
+        <div class="connection-badge" id="connection-badge">
+          <span class="status-dot"></span>
+          <span id="connection-text">Демо-режим · нет источника</span>
+        </div>
+      </section>
+
+      <div class="workspace-grid">
+        <aside class="control-rail" aria-label="Параметры подключения и анализа">
+          <div class="rail-scroll">
+            <section class="card control-card">
+              <div class="card-heading">
+                <div>
+                  <h2>Устройства</h2>
+                  <p>Выберите источник видеосигнала</p>
+                </div>
+                <button class="icon-button" id="scan-refresh" type="button" aria-label="Обновить список устройств" title="Обновить список">↻</button>
+              </div>
+              <div class="scan-actions">
+                <button class="button button-quiet button-small" data-scan="RGB-детектор">RGB-детектор</button>
+                <button class="button button-quiet button-small" data-scan="USB-камера">USB-камера</button>
+                <button class="button button-quiet button-small scan-wide" data-scan="IP-камера">IP-камера</button>
+              </div>
+              <div class="device-list" id="device-list">
+                <button class="device-row selected" type="button" data-source="0">
+                  <span class="device-icon">◉</span>
+                  <span class="device-copy"><strong>USB-камера</strong><small>Источник 0 · демо-макет</small></span>
+                  <span class="device-state">Выбрана</span>
+                </button>
+                <button class="device-row" type="button" data-source="miicam:0">
+                  <span class="device-icon">◉</span>
+                  <span class="device-copy"><strong>RGB-детектор</strong><small>MiiCam · недоступен в превью</small></span>
+                </button>
+              </div>
+              <p class="selected-device" id="selected-device">Выбранное устройство: USB-камера (0)</p>
+            </section>
+
+            <section class="card control-card">
+              <div class="card-heading compact-heading">
+                <div>
+                  <h2>Источник видео</h2>
+                  <p>Индекс, URL или RTSP-ссылка</p>
+                </div>
+              </div>
+              <label class="field-label" for="source-input">URL или индекс устройства</label>
+              <input class="text-input" id="source-input" value="0" autocomplete="off" spellcheck="false">
+              <div class="button-row">
+                <button class="button button-soft button-small" id="apply-source" type="button">Применить</button>
+                <button class="button button-quiet button-small" id="reconnect" type="button">Переподключить</button>
+              </div>
+            </section>
+
+            <section class="card control-card file-card">
+              <div class="card-heading compact-heading">
+                <div>
+                  <h2>Видео из файла</h2>
+                  <p>Офлайн-анализ с перемоткой и контролем скорости.</p>
+                </div>
+              </div>
+              <button class="button button-quiet button-wide" id="open-file" type="button"><span class="button-icon">↥</span> Открыть видеофайл</button>
+              <input id="file-input" type="file" accept="video/*,.mkv,.avi,.mov,.mp4" hidden>
+            </section>
+
+            <section class="card control-card roi-card">
+              <div class="card-heading compact-heading">
+                <div>
+                  <h2>Область анализа <span class="muted-heading">ROI</span></h2>
+                  <p>Задайте область вручную или по кадру.</p>
+                </div>
+              </div>
+              <div class="segmented" role="group" aria-label="Форма области анализа">
+                <button class="segment active" type="button" data-shape="circle">Круг</button>
+                <button class="segment" type="button" data-shape="rect">Прямоугольник</button>
+              </div>
+              <div class="roi-fields">
+                <label class="roi-field"><span>X</span><div class="stepper"><button type="button" data-step="x" data-delta="-1" aria-label="Уменьшить X">−</button><input id="roi-x" value="300" inputmode="numeric"><button type="button" data-step="x" data-delta="1" aria-label="Увеличить X">+</button></div></label>
+                <label class="roi-field"><span>Y</span><div class="stepper"><button type="button" data-step="y" data-delta="-1" aria-label="Уменьшить Y">−</button><input id="roi-y" value="150" inputmode="numeric"><button type="button" data-step="y" data-delta="1" aria-label="Увеличить Y">+</button></div></label>
+                <label class="roi-field"><span>Ширина</span><div class="stepper"><button type="button" data-step="w" data-delta="-10" aria-label="Уменьшить ширину">−</button><input id="roi-w" value="200" inputmode="numeric"><button type="button" data-step="w" data-delta="10" aria-label="Увеличить ширину">+</button></div></label>
+                <label class="roi-field"><span>Высота</span><div class="stepper"><button type="button" data-step="h" data-delta="-10" aria-label="Уменьшить высоту">−</button><input id="roi-h" value="200" inputmode="numeric"><button type="button" data-step="h" data-delta="10" aria-label="Увеличить высоту">+</button></div></label>
+              </div>
+              <div class="roi-summary" id="roi-summary"><span class="roi-summary-mark">⌖</span> X: 300&nbsp;&nbsp; Y: 150&nbsp;&nbsp; W: 200&nbsp;&nbsp; H: 200</div>
+              <div class="roi-quick-actions">
+                <button type="button" id="roi-enlarge">Увеличить</button>
+                <button type="button" id="roi-shrink">Уменьшить</button>
+                <button type="button" id="roi-reset">Сбросить</button>
+              </div>
+            </section>
+
+            <section class="card control-card save-card">
+              <div class="card-heading compact-heading">
+                <div>
+                  <h2>Сохранение результатов</h2>
+                  <p>Ряды, метки и видео будут сохранены сюда.</p>
+                </div>
+              </div>
+              <div class="path-input"><span class="path-icon">▱</span><input value="C:\\Users\\Lab\\Documents" aria-label="Папка сохранения"><button type="button" title="Выбрать папку" aria-label="Выбрать папку">…</button></div>
+            </section>
+          </div>
+
+          <div class="rail-footer">
+            <button class="button button-primary start-button" id="start-analysis" type="button"><span class="start-icon">▶</span><span id="start-label">Запустить анализ</span><span class="start-arrow">→</span></button>
+            <p class="footer-note"><span class="footer-dot"></span> Превью не подключается к камере</p>
+          </div>
+        </aside>
+
+        <section class="monitoring-area" aria-label="Мониторинг видеосигнала">
+          <div class="metrics-grid">
+            <article class="metric-card">
+              <div class="metric-head"><span class="channel-tag channel-r">R</span><span class="metric-context">СРЕДНЕЕ ПО ROI</span></div>
+              <div class="metric-value" id="metric-r">124.8</div>
+              <div class="metric-foot"><span class="metric-swatch swatch-r"></span> Красный канал <span class="metric-change positive">+0.8%</span></div>
+            </article>
+            <article class="metric-card">
+              <div class="metric-head"><span class="channel-tag channel-g">G</span><span class="metric-context">СРЕДНЕЕ ПО ROI</span></div>
+              <div class="metric-value" id="metric-g">98.3</div>
+              <div class="metric-foot"><span class="metric-swatch swatch-g"></span> Зелёный канал <span class="metric-change">стабильно</span></div>
+            </article>
+            <article class="metric-card">
+              <div class="metric-head"><span class="channel-tag channel-b">B</span><span class="metric-context">СРЕДНЕЕ ПО ROI</span></div>
+              <div class="metric-value" id="metric-b">72.5</div>
+              <div class="metric-foot"><span class="metric-swatch swatch-b"></span> Синий канал <span class="metric-change negative">−0.3%</span></div>
+            </article>
+            <article class="metric-card metric-index">
+              <div class="metric-head"><span class="index-icon">ƒ</span><span class="metric-context">ЦВЕТОВОЙ ИНДЕКС</span></div>
+              <div class="metric-value" id="metric-log">−0.2360</div>
+              <div class="metric-foot">Log10 (B/R) <span class="metric-change">без скачков</span></div>
+            </article>
+          </div>
+
+          <div class="monitor-grid">
+            <section class="card video-card">
+              <div class="card-heading video-heading">
+                <div>
+                  <h2>Видеопоток</h2>
+                  <p>Перемещайте контур на кадре, чтобы уточнить область анализа.</p>
+                </div>
+                <div class="video-meta"><span class="live-pill"><span></span> ПРЕДПРОСМОТР</span><span class="resolution">1920 × 1080</span></div>
+              </div>
+              <div class="scene-frame" id="scene-frame">
+                <svg class="camera-scene" viewBox="0 0 1200 680" role="img" aria-label="Демонстрационная сцена видеопотока лабораторного образца">
+                  <defs>
+                    <linearGradient id="scene-bg" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stop-color="#202c28"/><stop offset=".58" stop-color="#111a17"/><stop offset="1" stop-color="#0b1210"/></linearGradient>
+                    <radialGradient id="scene-glow" cx="50%" cy="47%" r="62%"><stop offset="0" stop-color="#52645a" stop-opacity=".38"/><stop offset="1" stop-color="#121a17" stop-opacity="0"/></radialGradient>
+                    <linearGradient id="glass" x1="0" y1="0" x2="1" y2="0"><stop offset="0" stop-color="#d8e6dd" stop-opacity=".06"/><stop offset=".28" stop-color="#e9f3ed" stop-opacity=".48"/><stop offset=".52" stop-color="#eef3ef" stop-opacity=".13"/><stop offset=".8" stop-color="#dce7df" stop-opacity=".3"/><stop offset="1" stop-color="#d1dfd6" stop-opacity=".06"/></linearGradient>
+                    <linearGradient id="sample" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#b98d5d" stop-opacity=".7"/><stop offset=".16" stop-color="#816342" stop-opacity=".82"/><stop offset="1" stop-color="#52614b" stop-opacity=".94"/></linearGradient>
+                    <linearGradient id="metal" x1="0" y1="0" x2="1" y2="0"><stop offset="0" stop-color="#5c6a63"/><stop offset=".28" stop-color="#c0c9c2"/><stop offset=".52" stop-color="#69766f"/><stop offset=".78" stop-color="#d2d9d3"/><stop offset="1" stop-color="#526058"/></linearGradient>
+                    <filter id="soft-glow"><feGaussianBlur stdDeviation="18"/></filter>
+                    <pattern id="micro-grid" width="48" height="48" patternUnits="userSpaceOnUse"><path d="M48 0H0V48" fill="none" stroke="#a8b8ae" stroke-opacity=".055" stroke-width="1"/></pattern>
+                  </defs>
+                  <rect width="1200" height="680" fill="url(#scene-bg)"/>
+                  <rect width="1200" height="680" fill="url(#scene-glow)"/>
+                  <rect width="1200" height="680" fill="url(#micro-grid)"/>
+                  <ellipse cx="598" cy="586" rx="258" ry="35" fill="#95aa9c" opacity=".13" filter="url(#soft-glow)"/>
+                  <g opacity=".46" stroke="#92a399" fill="none">
+                    <path d="M174 82V598M1025 78V600" stroke-width="3"/>
+                    <path d="M142 133H1059M142 565H1059" stroke-width="2"/>
+                    <path d="M168 194H252M168 255H226M168 316H252M168 377H226M168 438H252M168 499H252" stroke-width="2"/>
+                    <path d="M942 194H1028M974 255H1028M942 316H1028M974 377H1028M942 438H1028M942 499H1028" stroke-width="2"/>
+                  </g>
+                  <g opacity=".34" fill="#b4c4ba">
+                    <circle cx="174" cy="135" r="6"/><circle cx="1024" cy="135" r="6"/>
+                    <circle cx="174" cy="565" r="6"/><circle cx="1024" cy="565" r="6"/>
+                  </g>
+                  <g>
+                    <rect x="452" y="102" width="296" height="35" rx="6" fill="url(#metal)" opacity=".78"/>
+                    <rect x="474" y="136" width="252" height="25" rx="4" fill="#1a2420" stroke="#a9b8ae" stroke-opacity=".4"/>
+                    <rect x="530" y="158" width="140" height="342" rx="43" fill="url(#glass)" stroke="#d4e0d8" stroke-opacity=".45" stroke-width="3"/>
+                    <rect x="545" y="177" width="110" height="300" rx="34" fill="#14201b" opacity=".72"/>
+                    <path d="M546 309 Q600 299 654 309 L654 438 Q654 472 620 480 L580 480 Q546 472 546 438Z" fill="url(#sample)"/>
+                    <path d="M547 311 Q600 301 653 311" fill="none" stroke="#d0ad7c" stroke-opacity=".8" stroke-width="3"/>
+                    <rect x="523" y="217" width="154" height="14" rx="7" fill="url(#metal)" opacity=".83"/>
+                    <rect x="523" y="444" width="154" height="13" rx="6" fill="url(#metal)" opacity=".78"/>
+                    <rect x="512" y="491" width="176" height="31" rx="5" fill="url(#metal)" opacity=".8"/>
+                    <rect x="553" y="521" width="94" height="30" rx="4" fill="#3e4c44" stroke="#b9c6be" stroke-opacity=".5"/>
+                    <path d="M563 552H637L665 585H535Z" fill="url(#metal)" opacity=".72"/>
+                    <path d="M585 180V280" stroke="#f2f6f3" stroke-opacity=".45" stroke-width="4" stroke-linecap="round"/>
+                    <path d="M622 179V298" stroke="#f2f6f3" stroke-opacity=".14" stroke-width="2"/>
+                  </g>
+                  <g opacity=".5" stroke="#cad5ce" fill="none">
+                    <path d="M326 160H445M755 160H875" stroke-width="2"/>
+                    <path d="M326 500H445M755 500H875" stroke-width="2"/>
+                    <circle cx="325" cy="160" r="5" fill="#b9c8be"/><circle cx="876" cy="160" r="5" fill="#b9c8be"/>
+                  </g>
+                  <g id="roi-overlay" class="roi-circle">
+                    <circle class="roi-guide circle-guide" cx="600" cy="352" r="162"/>
+                    <rect class="roi-guide roi-rect-box" x="438" y="190" width="324" height="324" rx="7"/>
+                    <path d="M600 174V196M600 508V530M422 352H444M756 352H778" class="roi-cross"/>
+                    <circle cx="600" cy="352" r="4" class="roi-center"/>
+                  </g>
+                  <g class="scene-hud">
+                    <rect x="27" y="24" width="225" height="56" rx="9"/>
+                    <circle cx="49" cy="52" r="5" class="hud-dot"/>
+                    <text x="65" y="48" class="hud-main">ДЕМО-КАДР</text>
+                    <text x="65" y="66" class="hud-secondary">Источник не подключён</text>
+                    <rect x="1000" y="24" width="172" height="40" rx="9"/>
+                    <text x="1020" y="50" class="hud-secondary">FPS</text>
+                    <text x="1125" y="51" class="hud-main" text-anchor="end">60</text>
+                    <rect x="27" y="598" width="254" height="56" rx="9"/>
+                    <text x="45" y="621" class="hud-secondary">ROI · RGB СРЕДНЕЕ</text>
+                    <text x="45" y="642" class="hud-main">124.8 / 98.3 / 72.5</text>
+                    <text x="1172" y="636" class="hud-secondary" text-anchor="end">КОНЦЕПТ · 01</text>
+                  </g>
+                </svg>
+                <div class="scene-vignette"></div>
+                <div class="scene-roi-caption"><span class="roi-caption-mark">⌖</span><span id="scene-roi-text">Круг · X:300 Y:150 · 200 × 200 px</span></div>
+                <div class="scene-corner corner-tl"></div><div class="scene-corner corner-br"></div>
+              </div>
+              <div class="video-footer">
+                <div class="video-tip"><span class="tip-icon">i</span> В реальной сессии камера и ROI отображаются здесь в реальном времени.</div>
+                <span class="video-timestamp" id="video-time">00:00:00</span>
+              </div>
+            </section>
+
+            <aside class="insight-rail">
+              <section class="card signal-card">
+                <div class="card-heading signal-heading">
+                  <div><h2>Сигнал ROI</h2><p>Изменение каналов во времени</p></div>
+                  <button class="more-button" id="refresh-chart" type="button" title="Обновить график" aria-label="Обновить график">↻</button>
+                </div>
+                <div class="chart-legend">
+                  <span><i class="legend-dot r-dot"></i>R</span><span><i class="legend-dot g-dot"></i>G</span><span><i class="legend-dot b-dot"></i>B</span>
+                  <span class="chart-period">30 сек</span>
+                </div>
+                <div class="chart-wrap">
+                  <svg class="signal-chart" viewBox="0 0 340 190" preserveAspectRatio="none" role="img" aria-label="Демонстрационный график RGB">
+                    <g class="chart-grid-lines">
+                      <line x1="38" y1="17" x2="330" y2="17"/><line x1="38" y1="55" x2="330" y2="55"/><line x1="38" y1="93" x2="330" y2="93"/><line x1="38" y1="131" x2="330" y2="131"/><line x1="38" y1="169" x2="330" y2="169"/>
+                      <line x1="38" y1="17" x2="38" y2="169"/><line x1="111" y1="17" x2="111" y2="169"/><line x1="184" y1="17" x2="184" y2="169"/><line x1="257" y1="17" x2="257" y2="169"/><line x1="330" y1="17" x2="330" y2="169"/>
+                    </g>
+                    <g class="chart-axis-labels"><text x="4" y="20">300</text><text x="12" y="58">225</text><text x="12" y="96">150</text><text x="12" y="134">75</text><text x="19" y="172">0</text><text x="38" y="185">−30</text><text x="181" y="185" text-anchor="middle">−15</text><text x="330" y="185" text-anchor="end">с</text></g>
+                    <polyline id="line-r" class="chart-line line-r" points="38,112 54,109 70,111 86,105 102,107 118,103 134,106 150,101 166,104 182,98 198,102 214,96 230,99 246,93 262,96 278,91 294,95 310,87 330,90"/>
+                    <polyline id="line-g" class="chart-line line-g" points="38,126 54,128 70,122 86,124 102,119 118,123 134,118 150,120 166,116 182,119 198,113 214,118 230,112 246,115 262,111 278,115 294,109 310,112 330,107"/>
+                    <polyline id="line-b" class="chart-line line-b" points="38,142 54,137 70,140 86,134 102,138 118,132 134,135 150,130 166,133 182,128 198,132 214,125 230,128 246,123 262,127 278,120 294,123 310,118 330,122"/>
+                    <line class="chart-cursor" id="chart-cursor" x1="270" y1="17" x2="270" y2="169"/>
+                    <circle class="chart-cursor-dot dot-r" id="cursor-r" cx="270" cy="94" r="3.5"/><circle class="chart-cursor-dot dot-g" id="cursor-g" cx="270" cy="113" r="3.5"/><circle class="chart-cursor-dot dot-b" id="cursor-b" cx="270" cy="125" r="3.5"/>
+                  </svg>
+                </div>
+                <div class="chart-foot"><span>Обновление сигнала</span><strong id="chart-state"><span class="tiny-dot"></span> стабильно</strong></div>
+              </section>
+
+              <section class="card transition-card">
+                <div class="card-heading transition-heading">
+                  <div><h2>Ход анализа</h2><p>Последовательность фракций</p></div>
+                  <span class="transition-icon">⌁</span>
+                </div>
+                <div class="phase-list">
+                  <div class="phase-row active"><span class="phase-marker"><i></i></span><div class="phase-copy"><strong>SAT</strong><small>Насыщенные углеводороды</small></div><span class="phase-state">Текущий этап</span></div>
+                  <div class="phase-row"><span class="phase-marker"><i></i></span><div class="phase-copy"><strong>AROM</strong><small>Ароматические соединения</small></div><span class="phase-state">Ожидание</span></div>
+                  <div class="phase-row"><span class="phase-marker"><i></i></span><div class="phase-copy"><strong>BR</strong><small>Смолы</small></div><span class="phase-state">Ожидание</span></div>
+                  <div class="phase-row"><span class="phase-marker"><i></i></span><div class="phase-copy"><strong>ABR</strong><small>Асфальтены</small></div><span class="phase-state">Ожидание</span></div>
+                </div>
+                <div class="transition-footer"><span>Индекс перехода</span><strong id="transition-score">1.24 <small>/ 10</small></strong></div>
+              </section>
+
+              <section class="session-note"><span class="note-icon">i</span><span><strong>Демонстрационный режим</strong><br>Числа и график имитируют работу интерфейса.</span></section>
+            </aside>
+          </div>
+        </section>
+      </div>
+    </main>
+  </div>
+
+  <dialog class="modal" id="settings-modal">
+    <div class="modal-head"><div class="modal-mark">E</div><div><p class="eyebrow">ЭЛЮТЕК · ПАРАМЕТРЫ</p><h2>Настройки анализа</h2><p class="modal-subtitle">Быстрый обзор основных разделов настроек</p></div><button class="modal-close" data-close type="button" aria-label="Закрыть">×</button></div>
+    <div class="modal-tabs" role="tablist"><button class="modal-tab active" data-tab="video" type="button">Видео и запись</button><button class="modal-tab" data-tab="graphs" type="button">Графики</button><button class="modal-tab" data-tab="roi" type="button">ROI</button><button class="modal-tab" data-tab="alerts" type="button">Автометки</button><button class="modal-tab" data-tab="performance" type="button">Производительность</button></div>
+    <div class="modal-content" id="modal-content"></div>
+    <div class="modal-footer"><span>Настройки сохраняются в профиле пользователя</span><button class="button button-primary" data-close type="button">Готово</button></div>
+  </dialog>
+  <dialog class="modal license-modal" id="license-modal">
+    <div class="modal-head"><div class="modal-mark">E</div><div><p class="eyebrow">ЭЛЮТЕК · ДОСТУП</p><h2>Лицензия и активация</h2><p class="modal-subtitle">Демонстрационный экран лицензирования</p></div><button class="modal-close" data-close type="button" aria-label="Закрыть">×</button></div>
+    <div class="license-status"><span class="license-status-icon">✓</span><div><strong>Демо-режим</strong><p>Макет показывает полный интерфейс, но не активирует продукт.</p></div></div>
+    <label class="field-label" for="license-key">Ключ активации</label><div class="license-input-row"><input class="text-input" id="license-key" placeholder="XXXX-XXXX-XXXX-XXXX"><button class="button button-quiet" type="button" id="paste-key">Вставить</button></div>
+    <div class="modal-footer"><span>Аппаратный ID доступен в установленном приложении</span><button class="button button-primary" data-close type="button">Закрыть</button></div>
+  </dialog>
+  <div class="toast" id="toast" role="status" aria-live="polite"></div>
+
+  <script src="app.js"></script>
+</body>
+</html>

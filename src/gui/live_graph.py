@@ -40,6 +40,7 @@ from ..config import (
     TRANSITION_NOISE_RGB_SUM_SLOPE, TRANSITION_NOISE_K_CHROM,
     TRANSITION_NOISE_LOG_RATIO_SPEED, TRANSITION_Z_CAP
 )
+from .theme import get_palette
 
 
 class LiveGraphWindow:
@@ -83,7 +84,7 @@ class LiveGraphWindow:
                     pass
 
         self.win = _GraphMainWindow()
-        self.win.setWindowTitle("RGB Graph")
+        self.win.setWindowTitle("Элютек · Аналитическая сессия")
         self.win.setGeometry(100, 100, 1180, 820)
         self.win.setMinimumSize(520, 420)
         try:
@@ -161,8 +162,8 @@ class LiveGraphWindow:
         except Exception:
             pass
 
-        ctrl = QtWidgets.QHBoxLayout()
-        ctrl.setSpacing(8)
+        # Analysis controls are grouped into a quiet two-level toolbar so
+        # channel, view and annotation actions remain easy to scan.
         self.btn_r = QtWidgets.QPushButton('R')
         self.btn_r.setCheckable(True)
         self.btn_r.setChecked(True)
@@ -173,89 +174,130 @@ class LiveGraphWindow:
         self.btn_b.setCheckable(True)
         self.btn_b.setChecked(True)
 
-        self.unit_btn = QtWidgets.QPushButton('TIME · MS')
+        self.unit_btn = QtWidgets.QPushButton('ВРЕМЯ · МС')
         self.unit_btn.setCheckable(False)
-
-        self.track_btn = QtWidgets.QPushButton('TRACK')
+        self.track_btn = QtWidgets.QPushButton('СЛЕДИТЬ')
         self.track_btn.setCheckable(True)
         self.track_btn.setChecked(True)
-        self.track_btn.setToolTip('Track = автообзор всего графика. При ручном зуме/сдвиге автоматически переключается в Manual.')
-
-        self.log_btn = QtWidgets.QPushButton('LOGS · B/R · B/G')
+        self.track_btn.setToolTip('Автообзор графика. Ручное масштабирование переключает режим в Manual.')
+        self.log_btn = QtWidgets.QPushButton('Log B/R · B/G')
         self.log_btn.setCheckable(True)
         self.log_btn.setChecked(True)
-
-        self.refresh_btn = QtWidgets.QPushButton('REFRESH')
+        self.refresh_btn = QtWidgets.QPushButton('Обновить')
         self.refresh_btn.setCheckable(False)
-        self.refresh_btn.setToolTip('Перерисовать графики, не сбрасывая ручной масштаб, если включён Manual.')
-
-        self.fs_btn = QtWidgets.QPushButton('FULL')
+        self.refresh_btn.setToolTip('Перерисовать графики, не сбрасывая ручной масштаб в режиме Manual.')
+        self.fs_btn = QtWidgets.QPushButton('На весь экран')
         self.fs_btn.setCheckable(True)
 
-        self.stop_btn = QtWidgets.QPushButton('⏹ STOP')
-        self.stop_btn.setToolTip('Остановить анализ: нажмите два раза. Сначала сохраняется CSV/Excel, видео — вторично')
+        self.stop_btn = QtWidgets.QPushButton('Остановить')
+        self.stop_btn.setToolTip('Для безопасной остановки нажмите кнопку дважды. Данные сохраняются перед закрытием.')
         self.stop_btn.setObjectName('dangerButton')
-
-        self.pts_label = QtWidgets.QLabel('PTS:0')
-        self.pts_label.setMinimumWidth(90)
-        self.graphs_btn = QtWidgets.QPushButton('ГРАФИКИ · Сетка 2×N')
-        self.graphs_btn.setToolTip('Выбор графиков и раскладки')
+        self.pts_label = QtWidgets.QLabel('Точки · 0')
+        self.pts_label.setMinimumWidth(78)
+        self.pts_label.setAlignment(self.QtCore.Qt.AlignCenter)
+        self.pts_label.setObjectName('pointsBadge')
+        self.graphs_btn = QtWidgets.QPushButton('Графики · 2×N')
+        self.graphs_btn.setToolTip('Выбор отображаемых графиков и раскладки')
         self.graphs_btn.clicked.connect(self._open_graph_selector)
 
-        self.ann_btn = QtWidgets.QPushButton('MARK')
+        self.ann_btn = QtWidgets.QPushButton('Добавить метку')
         self.ann_btn.setCheckable(False)
         self.ann_btn.setToolTip('Добавить метку в текущий момент времени (M — быстро, Shift+M — с описанием)')
         self.ann_btn.clicked.connect(lambda: self._safe_call(self._add_annotation_dialog))
-
-        self.ann_pick_btn = QtWidgets.QPushButton('PICK')
+        self.ann_pick_btn = QtWidgets.QPushButton('По точке')
         self.ann_pick_btn.setCheckable(True)
-        self.ann_pick_btn.setToolTip('Включите и кликните на график, чтобы поставить метку в любой точке')
+        self.ann_pick_btn.setToolTip('Включите режим и выберите точку на графике для метки')
         self.ann_pick_btn.toggled.connect(self._on_pick_mode_toggled)
-
-        self.ann_list_btn = QtWidgets.QPushButton('LIST')
+        self.ann_list_btn = QtWidgets.QPushButton('Метки')
         self.ann_list_btn.setCheckable(False)
         self.ann_list_btn.clicked.connect(lambda: self._safe_call(self._show_annotations_list))
-
-        self.ann_clear_btn = QtWidgets.QPushButton('CLEAR')
+        self.ann_clear_btn = QtWidgets.QPushButton('Очистить')
         self.ann_clear_btn.setCheckable(False)
         self.ann_clear_btn.clicked.connect(lambda: self._safe_call(self._clear_annotations))
 
         toolbar_widgets = [
-            self.btn_r, self.btn_g, self.btn_b, self.unit_btn,
-            self.log_btn, self.track_btn, self.refresh_btn, self.fs_btn,
-            self.ann_btn, self.ann_pick_btn, self.ann_list_btn, self.ann_clear_btn,
+            self.btn_r, self.btn_g, self.btn_b, self.unit_btn, self.log_btn,
+            self.track_btn, self.refresh_btn, self.fs_btn, self.ann_btn,
+            self.ann_pick_btn, self.ann_list_btn, self.ann_clear_btn,
             self.stop_btn, self.pts_label, self.graphs_btn
         ]
-        for w in toolbar_widgets:
+        for widget in toolbar_widgets:
             try:
-                w.setMinimumWidth(0)
-                w.setMinimumHeight(34)
-                w.setSizePolicy(self.QtWidgets.QSizePolicy.Preferred, self.QtWidgets.QSizePolicy.Fixed)
+                widget.setMinimumWidth(0)
+                widget.setMinimumHeight(31)
+                widget.setSizePolicy(self.QtWidgets.QSizePolicy.Preferred, self.QtWidgets.QSizePolicy.Fixed)
             except Exception:
                 pass
-            ctrl.addWidget(w)
 
-        ctrl.addStretch()
-        self._apply_elutek_qss()
-        self.layout.addLayout(ctrl)
+        toolbar = QtWidgets.QFrame()
+        toolbar.setObjectName('toolbarPanel')
+        toolbar_layout = QtWidgets.QVBoxLayout(toolbar)
+        toolbar_layout.setContentsMargins(12, 10, 12, 10)
+        toolbar_layout.setSpacing(9)
 
-        # Real-time Cursor Coordinates HUD bar (Отображение координат X, Y при наведении мыши на графики)
+        toolbar_top = QtWidgets.QHBoxLayout()
+        toolbar_top.setSpacing(9)
+        brand_mark = QtWidgets.QLabel('E')
+        brand_mark.setObjectName('toolbarBrandMark')
+        brand_mark.setAlignment(self.QtCore.Qt.AlignCenter)
+        brand_mark.setFixedSize(34, 34)
+        toolbar_top.addWidget(brand_mark)
+        title_stack = QtWidgets.QVBoxLayout()
+        title_stack.setSpacing(1)
+        graph_title = QtWidgets.QLabel('Аналитическая сессия')
+        graph_title.setObjectName('toolbarTitle')
+        graph_subtitle = QtWidgets.QLabel('RGB · SARA мониторинг')
+        graph_subtitle.setObjectName('toolbarSubtitle')
+        title_stack.addWidget(graph_title)
+        title_stack.addWidget(graph_subtitle)
+        toolbar_top.addLayout(title_stack)
+        toolbar_top.addStretch(1)
+        toolbar_top.addWidget(self.pts_label)
+        toolbar_top.addWidget(self.graphs_btn)
+        toolbar_top.addWidget(self.stop_btn)
+        toolbar_layout.addLayout(toolbar_top)
+
+        def make_tool_group(label):
+            group = QtWidgets.QFrame()
+            group.setObjectName('toolGroup')
+            group_layout = QtWidgets.QHBoxLayout(group)
+            group_layout.setContentsMargins(6, 5, 6, 5)
+            group_layout.setSpacing(5)
+            group_label = QtWidgets.QLabel(label)
+            group_label.setObjectName('toolGroupLabel')
+            group_layout.addWidget(group_label)
+            return group, group_layout
+
+        controls = QtWidgets.QHBoxLayout()
+        controls.setSpacing(8)
+        channel_group, channel_layout = make_tool_group('КАНАЛЫ')
+        for widget in (self.btn_r, self.btn_g, self.btn_b, self.log_btn):
+            channel_layout.addWidget(widget)
+        view_group, view_layout = make_tool_group('ВИД')
+        for widget in (self.unit_btn, self.track_btn, self.refresh_btn, self.fs_btn):
+            view_layout.addWidget(widget)
+        mark_group, mark_layout = make_tool_group('МЕТКИ')
+        for widget in (self.ann_btn, self.ann_pick_btn, self.ann_list_btn, self.ann_clear_btn):
+            mark_layout.addWidget(widget)
+        controls.addWidget(channel_group, 0)
+        controls.addWidget(view_group, 0)
+        controls.addWidget(mark_group, 1)
+        toolbar_layout.addLayout(controls)
+        self.layout.addWidget(toolbar)
+
+        # Cursor coordinates appear here when the pointer is over a graph.
         self.cursor_hud = QtWidgets.QFrame()
         self.cursor_hud.setObjectName('cursorHud')
-        self.cursor_hud.setFixedHeight(28)
+        self.cursor_hud.setFixedHeight(30)
         self.cursor_hud.setSizePolicy(self.QtWidgets.QSizePolicy.Expanding, self.QtWidgets.QSizePolicy.Fixed)
-        self.cursor_hud.setStyleSheet(
-            "QFrame#cursorHud { background-color: rgba(17, 24, 39, 0.85); border: 1px solid #2A3451; border-radius: 6px; padding: 2px 10px; }"
-        )
         hud_layout = QtWidgets.QHBoxLayout(self.cursor_hud)
-        hud_layout.setContentsMargins(6, 0, 6, 0)
+        hud_layout.setContentsMargins(10, 0, 8, 0)
         hud_layout.setSpacing(10)
-
-        self.cursor_hud_label = QtWidgets.QLabel("📍 Наведите курсор на любой график для отображения координат (X: Время, Y: Значение)")
-        self.cursor_hud_label.setStyleSheet("font-family: 'Consolas', 'Segoe UI', monospace; font-size: 11px; font-weight: bold; color: #38BDF8;")
+        self.cursor_hud_label = QtWidgets.QLabel('Наведите курсор на график, чтобы увидеть координаты времени и значения.')
+        self.cursor_hud_label.setObjectName('cursorHudLabel')
         hud_layout.addWidget(self.cursor_hud_label)
         hud_layout.addStretch()
-
+        self._apply_elutek_qss()
         self.layout.addWidget(self.cursor_hud)
 
         if self.is_video_file:
@@ -692,9 +734,10 @@ class LiveGraphWindow:
                             time_str = f"{mins:02d}:{secs:04.1f} ({t_sec:.2f} с)"
 
                             is_light = (getattr(self, 'theme_mode', 'dark') == 'light')
-                            y_col = '#B45309' if is_light else '#FBBF24'
-                            slope_col = '#047857' if is_light else '#85E889'
-                            score_col = '#B45309' if is_light else '#F59E0B'
+                            hover_colors = get_palette(is_light)
+                            y_col = hover_colors['accent']
+                            slope_col = hover_colors['success']
+                            score_col = hover_colors['warning']
 
                             extra_info = ""
                             if name == 'RGB' and hasattr(self, 'time_history') and len(self.time_history):
@@ -705,7 +748,11 @@ class LiveGraphWindow:
                                     rv = float(self.r_history[idx])
                                     gv = float(self.g_history[idx])
                                     bv = float(self.b_history[idx])
-                                    extra_info = f" | <span style='color:#EF4444;'>R:{rv:.1f}</span> <span style='color:#22C55E;'>G:{gv:.1f}</span> <span style='color:#3B82F6;'>B:{bv:.1f}</span>"
+                                    extra_info = (
+                                        f" | <span style='color:{hover_colors['channel_r']};'>R:{rv:.1f}</span> "
+                                        f"<span style='color:{hover_colors['channel_g']};'>G:{gv:.1f}</span> "
+                                        f"<span style='color:{hover_colors['channel_b']};'>B:{bv:.1f}</span>"
+                                    )
                             elif name == 'RGB_sum_slope_30s' and hasattr(self, 'slope30_history') and len(self.slope30_history):
                                 th = np.array(self.time_history, dtype=float) if hasattr(self, 'time_history') else []
                                 if len(th):
@@ -1123,68 +1170,64 @@ class LiveGraphWindow:
     def _apply_elutek_qss(self):
         try:
             light = self.theme_mode == 'light'
-            bg = ELUTEK_LIGHT_BG if light else ELUTEK_INK
-            panel = '#FFFFFF' if light else ELUTEK_PANEL_DARK
-            fg = ELUTEK_INK if light else ELUTEK_200
-
-            btn_bg = '#FFFFFF' if light else ELUTEK_600
-            btn_fg = '#0E121B' if light else '#FFFFFF'
-            btn_border = '#CBD5E1' if light else ELUTEK_BRAND
-            btn_hover_bg = '#E2E8F0' if light else ELUTEK_BRAND
-            btn_hover_fg = '#0E121B' if light else '#FFFFFF'
-            btn_checked_bg = ELUTEK_BRAND if light else '#2563EB'
-            btn_checked_fg = '#FFFFFF'
-            btn_checked_border = '#1C2336' if light else '#3B82F6'
-
-            danger_bg = '#DC2626'
-            danger_border = '#B91C1C'
+            colors = get_palette(light)
+            bg = colors['background']
+            panel = colors['surface']
+            panel_alt = colors['surface_alt']
+            fg = colors['text']
+            border = colors['border']
+            accent = colors['accent']
 
             self.win.setStyleSheet(f"""
                 QMainWindow, QWidget#ElutekCentral {{ background: {bg}; color: {fg}; }}
-                QLabel {{ color: {fg}; font-family: Segoe UI, Arial; font-size: 10pt; }}
-                QPushButton {{ background: {btn_bg}; color: {btn_fg}; border: 1.5px solid {btn_border}; border-radius: 8px; padding: 6px 11px; font-family: Segoe UI, Arial; font-size: 9pt; font-weight: 700; letter-spacing: 0.3px; }}
-                QPushButton:hover {{ background: {btn_hover_bg}; color: {btn_hover_fg}; border-color: {ELUTEK_300}; }}
-                QPushButton:checked {{ background: {btn_checked_bg}; color: {btn_checked_fg}; border: 1.5px solid {btn_checked_border}; }}
-                QPushButton#dangerButton {{ background: {danger_bg}; color: #FFFFFF; border: 1.5px solid {danger_border}; font-weight: bold; }}
-                QPushButton#dangerButton:hover {{ background: #B91C1C; color: #FFFFFF; }}
-                QLabel#transitionAlert {{ background: rgba(185,74,85,245); color: #FFFFFF; border: 2px solid {ELUTEK_SUCCESS}; border-radius: 14px; padding: 12px 22px; font-size: 15pt; font-weight: 900; }}
-                QLabel#transitionAlert:hover {{ background: rgba(220,50,65,255); border: 2px solid #FFFFFF; }}
-                QFrame#transitionStatusPanel {{ background: {panel}; border: 1px solid {ELUTEK_BRAND if light else '#374151'}; border-radius: 12px; }}
-                QLabel#transitionStatusHeader {{ color: {'#111111' if light else '#FFFFFF'}; font-weight: 900; }}
-                QLabel#transitionStatusLine {{ color: {fg}; font-weight: 650; }}
-                QLabel#transitionStatusLine[state="active"] {{ color: {'#111111' if light else '#FFFFFF'}; font-weight: 800; }}
-                QLabel#transitionStatusLine[state="done"] {{ color: {ELUTEK_SUCCESS}; font-weight: 750; }}
-                QLabel#transitionStatusDetail {{ color: {ELUTEK_BRAND if light else ELUTEK_ACCENT}; border-top: 1px solid {ELUTEK_BRAND if light else '#374151'}; padding-top: 5px; font-family: Consolas, Segoe UI, Arial; }}
                 QWidget {{ font-family: 'Segoe UI'; font-size: 9pt; }}
+                QLabel {{ color: {fg}; font-family: 'Segoe UI', Arial; font-size: 9pt; }}
+                QFrame#toolbarPanel {{ background: {panel}; border: 1px solid {border}; border-radius: 12px; }}
+                QFrame#toolGroup {{ background: {panel_alt}; border: 1px solid {border}; border-radius: 9px; }}
+                QLabel#toolbarBrandMark {{ background: {accent}; color: {colors['accent_on']}; border-radius: 9px; font-size: 14pt; font-weight: 800; }}
+                QLabel#toolbarTitle {{ font-size: 12pt; font-weight: 750; }}
+                QLabel#toolbarSubtitle {{ color: {colors['muted']}; font-size: 8pt; }}
+                QLabel#toolGroupLabel {{ color: {colors['muted']}; font-size: 7pt; font-weight: 750; padding: 0 3px; }}
+                QLabel#pointsBadge {{ background: {colors['accent_soft']}; color: {accent}; border-radius: 7px; padding: 7px 10px; font-weight: 700; }}
+                QPushButton {{ background: {panel}; color: {fg}; border: 1px solid {border}; border-radius: 8px; padding: 7px 11px; font-size: 9pt; font-weight: 600; }}
+                QPushButton:hover {{ background: {colors['surface_hover']}; border-color: {accent}; }}
+                QPushButton:checked {{ background: {colors['accent_soft']}; color: {accent}; border: 1px solid {accent}; }}
+                QPushButton#dangerButton {{ background: {colors['danger_soft']}; color: {colors['danger']}; border: 1px solid {colors['danger_soft']}; font-weight: 700; }}
+                QPushButton#dangerButton:hover {{ background: {colors['danger']}; color: {colors['danger_on']}; }}
+                QLabel#transitionAlert {{ background: {colors['danger']}; color: {colors['danger_on']}; border: 1px solid {colors['danger']}; border-radius: 12px; padding: 11px 20px; font-size: 14pt; font-weight: 800; }}
+                QLabel#transitionAlert:hover {{ background: {colors['danger_hover']}; border-color: {colors['danger_hover']}; }}
+                QFrame#transitionStatusPanel {{ background: {panel}; border: 1px solid {border}; border-radius: 12px; }}
+                QLabel#transitionStatusHeader {{ color: {fg}; font-weight: 800; }}
+                QLabel#transitionStatusLine {{ color: {fg}; font-weight: 600; }}
+                QLabel#transitionStatusLine[state="active"] {{ color: {accent}; font-weight: 800; }}
+                QLabel#transitionStatusLine[state="done"] {{ color: {colors['success']}; font-weight: 700; }}
+                QLabel#transitionStatusDetail {{ color: {colors['muted']}; border-top: 1px solid {border}; padding-top: 5px; font-family: Consolas, 'Segoe UI', Arial; }}
                 QMainWindow, QDialog, QScrollArea, QAbstractScrollArea, QScrollArea > QWidget, QScrollArea QWidget#qt_scrollarea_viewport, QWidget#graphHost {{ background: {bg}; color: {fg}; }}
                 QScrollArea#graphScroll {{ background: {bg}; border: none; }}
                 QDialog {{ background: {bg}; color: {fg}; }}
                 QDialog QLabel, QGroupBox, QRadioButton, QListWidget, QListWidget::item {{ color: {fg}; }}
-                QGroupBox {{ border: 1px solid {ELUTEK_200}; border-radius: 6px; margin-top: 8px; padding-top: 8px; }}
-                QGroupBox::title {{ color: {fg}; subcontrol-origin: margin; left: 8px; padding: 0 4px; }}
-                QLineEdit, QTextEdit, QListWidget, QComboBox, QSpinBox, QDoubleSpinBox {{ background: {panel}; color: {fg}; border: 1px solid {ELUTEK_200}; border-radius: 6px; padding: 5px; selection-background-color: {ELUTEK_BRAND}; selection-color: #FFFFFF; }}
+                QGroupBox {{ background: {panel}; border: 1px solid {border}; border-radius: 8px; margin-top: 10px; padding: 8px 10px 10px; }}
+                QGroupBox::title {{ color: {fg}; subcontrol-origin: margin; left: 10px; padding: 0 5px; }}
+                QLineEdit, QTextEdit, QListWidget, QComboBox, QSpinBox, QDoubleSpinBox {{ background: {panel_alt}; color: {fg}; border: 1px solid {border}; border-radius: 7px; padding: 6px 8px; selection-background-color: {colors['accent_soft']}; selection-color: {fg}; }}
                 QListWidget {{ alternate-background-color: {panel}; }}
-                QScrollBar:vertical {{ background: {panel}; width: 8px; margin: 0px; border: none; border-radius: 4px; }}
-                QScrollBar::handle:vertical {{ background: {ELUTEK_300}; border-radius: 4px; min-height: 25px; }}
-                QScrollBar::handle:vertical:hover {{ background: {ELUTEK_BRAND if light else '#60A5FA'}; }}
+                QScrollBar:vertical {{ background: {bg}; width: 8px; margin: 0px; border: none; border-radius: 4px; }}
+                QScrollBar::handle:vertical {{ background: {colors['muted']}; border-radius: 4px; min-height: 25px; }}
+                QScrollBar::handle:vertical:hover {{ background: {accent}; }}
                 QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical {{ height: 0px; background: none; }}
                 QScrollBar::add-page:vertical, QScrollBar::sub-page:vertical {{ background: none; }}
-                QScrollBar:horizontal {{ background: {panel}; height: 8px; margin: 0px; border: none; border-radius: 4px; }}
-                QScrollBar::handle:horizontal {{ background: {ELUTEK_300}; border-radius: 4px; min-width: 25px; }}
+                QScrollBar:horizontal {{ background: {bg}; height: 8px; margin: 0px; border: none; border-radius: 4px; }}
+                QScrollBar::handle:horizontal {{ background: {colors['muted']}; border-radius: 4px; min-width: 25px; }}
                 QScrollBar::add-line:horizontal, QScrollBar::sub-line:horizontal {{ width: 0px; background: none; }}
                 QScrollBar::add-page:horizontal, QScrollBar::sub-page:horizontal {{ background: none; }}
             """)
 
             if hasattr(self, 'cursor_hud') and self.cursor_hud is not None:
-                hud_bg = '#F1F5F9' if light else 'rgba(17, 24, 39, 0.85)'
-                hud_border = '#CBD5E1' if light else '#2A3451'
-                hud_text_color = '#0284C7' if light else '#38BDF8'
                 self.cursor_hud.setStyleSheet(
-                    f"QFrame#cursorHud {{ background-color: {hud_bg}; border: 1px solid {hud_border}; border-radius: 6px; padding: 2px 10px; }}"
+                    f"QFrame#cursorHud {{ background-color: {panel_alt}; border: 1px solid {border}; border-radius: 8px; padding: 2px 10px; }}"
                 )
                 if hasattr(self, 'cursor_hud_label') and self.cursor_hud_label is not None:
                     self.cursor_hud_label.setStyleSheet(
-                        f"font-family: 'Consolas', 'Segoe UI', monospace; font-size: 11px; font-weight: bold; color: {hud_text_color};"
+                        f"font-family: 'Consolas', 'Segoe UI', monospace; font-size: 10px; font-weight: 600; color: {accent};"
                     )
         except Exception:
             pass
@@ -1200,12 +1243,13 @@ class LiveGraphWindow:
                 pass
         self.custom_graphs = []
         is_light = (self.theme_mode == 'light')
-        title_color = "#0E121B" if is_light else "#93C5FD"
+        palette = get_palette(is_light)
+        title_color = palette['text']
 
         for definition in self.custom_graph_defs:
             name = str(definition.get('name', 'Пользовательский график')).strip()
             formula = str(definition.get('formula', '')).strip()
-            color = definition.get('color', ELUTEK_ACCENT)
+            color = definition.get('color', palette['accent'])
             if not name or not formula:
                 continue
             time_axis = self.pg.AxisItem(orientation='bottom')
@@ -1316,11 +1360,12 @@ class LiveGraphWindow:
     def _apply_theme(self):
         self._apply_elutek_qss()
         is_light = (self.theme_mode == 'light')
-        bg = ELUTEK_LIGHT_BG if is_light else ELUTEK_INK
-        axis_color = "#64748B" if is_light else ELUTEK_200
-        text_color = "#0E121B" if is_light else "#E2E8F0"
-        title_color = "#0E121B" if is_light else "#93C5FD"
-        grid_alpha = 0.16 if is_light else 0.22
+        colors = get_palette(is_light)
+        bg = colors['background']
+        axis_color = colors['muted']
+        text_color = colors['muted']
+        title_color = colors['text']
+        grid_alpha = 0.14 if is_light else 0.19
 
         axis_pen = self.pg.mkPen(axis_color, width=1.2)
         text_pen = self.pg.mkPen(text_color)
@@ -1381,16 +1426,17 @@ class LiveGraphWindow:
         self.transition_score_plot.setLabel('left', 'score', **{'color': text_color})
         self.transition_score_plot.setLabel('bottom', 'Time', **{'color': text_color})
 
-        log_color = '#DDAE6B' if self.theme_mode == 'dark' else '#8A4D12'
-        log_bg_color = '#8EC9E8' if self.theme_mode == 'dark' else '#245A76'
-        self.log_curve.setPen(self.pg.mkPen(log_color, width=2.5))
-        self.log_bg_curve.setPen(self.pg.mkPen(log_bg_color, width=2.5))
-        self.rgb_sum_slope_curve.setPen(self.pg.mkPen(ELUTEK_SUCCESS, width=2.2))
-        self.rgb_sum_slope_zero_line.setPen(self.pg.mkPen((198, 205, 225, 95) if self.theme_mode == 'dark' else (42, 52, 81, 120), width=1))
-        self.transition_score_curve.setPen(self.pg.mkPen('#DDAE6B' if self.theme_mode == 'dark' else '#8A4D12', width=2.2))
-        self.transition_score_line_warn.setPen(self.pg.mkPen((198, 205, 225, 95) if self.theme_mode == 'dark' else (42, 52, 81, 120), width=1))
-        self.transition_score_line_prob.setPen(self.pg.mkPen((221, 174, 107, 130) if self.theme_mode == 'dark' else (138, 77, 18, 140), width=1))
-        self.transition_score_line_strong.setPen(self.pg.mkPen((185, 74, 85, 160) if self.theme_mode == 'dark' else (185, 74, 85, 200), width=1.5))
+        self.r_curve.setPen(self.pg.mkPen(colors['channel_r'], width=2.1))
+        self.g_curve.setPen(self.pg.mkPen(colors['channel_g'], width=2.1))
+        self.b_curve.setPen(self.pg.mkPen(colors['channel_b'], width=2.1))
+        self.log_curve.setPen(self.pg.mkPen(colors['warning'], width=2.3))
+        self.log_bg_curve.setPen(self.pg.mkPen(colors['channel_b'], width=2.3))
+        self.rgb_sum_slope_curve.setPen(self.pg.mkPen(colors['success'], width=2.2))
+        self.rgb_sum_slope_zero_line.setPen(self.pg.mkPen(colors['border'], width=1))
+        self.transition_score_curve.setPen(self.pg.mkPen(colors['warning'], width=2.2))
+        self.transition_score_line_warn.setPen(self.pg.mkPen(colors['border'], width=1))
+        self.transition_score_line_prob.setPen(self.pg.mkPen(colors['warning'], width=1))
+        self.transition_score_line_strong.setPen(self.pg.mkPen(colors['danger'], width=1.4))
 
         self._apply_log_y_ranges(
             self._cached_log if len(self._cached_log) else None,
@@ -1406,10 +1452,10 @@ class LiveGraphWindow:
         )
         for plot_item in (self.plot, self.rgb_sum_slope_plot, self.transition_score_plot, self.log_plot, self.log_bg_plot):
             try:
-                plot_item.getAxis('left').setTextPen(fg)
-                plot_item.getAxis('bottom').setTextPen(fg)
-                plot_item.getAxis('left').setPen(fg)
-                plot_item.getAxis('bottom').setPen(fg)
+                plot_item.getAxis('left').setTextPen(text_pen)
+                plot_item.getAxis('bottom').setTextPen(text_pen)
+                plot_item.getAxis('left').setPen(axis_pen)
+                plot_item.getAxis('bottom').setPen(axis_pen)
             except Exception:
                 pass
         self._update_annotations()
@@ -1464,7 +1510,7 @@ class LiveGraphWindow:
         self._apply_single_log_y_range(self.log_bg_plot, log_bg_vals, '_log_bg_y_min', '_log_bg_y_max')
 
     def _update_axis_labels(self):
-        text_color = "#0E121B" if (self.theme_mode == 'light') else "#E2E8F0"
+        text_color = get_palette(self.theme_mode == 'light')['muted']
         unit_str = self.unit_mode.lower()
         lbl = f"Time ({unit_str})"
         self.plot.setLabel('bottom', lbl, **{'color': text_color})
@@ -1535,7 +1581,7 @@ class LiveGraphWindow:
             for item in getattr(self, 'custom_graphs', []):
                 item['curve'].setData([], [])
             if pts is not None:
-                self.pts_label.setText(f'PTS:{pts}')
+                self.pts_label.setText(f'Точки · {pts}')
             return
 
         x_arr = np.asarray(xs, dtype=np.float64)
@@ -1636,7 +1682,7 @@ class LiveGraphWindow:
         )
 
         if pts is not None:
-            self.pts_label.setText(f'PTS:{pts}')
+            self.pts_label.setText(f'Точки · {pts}')
 
         # IMPORTANT: all curves (including custom graphs) have now received
         # their data.  Only here do we force the common X range, otherwise a
@@ -2075,7 +2121,7 @@ class LiveGraphWindow:
             self._custom_auto_mark_active[rule_key] = True
             self._custom_auto_mark_last_fired[rule_key] = time_sec
             description = str(rule.get("description") or rule.get("name") or "Пользовательская автометка")
-            color = str(rule.get("color") or "#44FF44")
+            color = str(rule.get("color") or get_palette(self.theme_mode == 'light')['success'])
             try:
                 self.annotation_manager.add_annotation(
                     time_ms, description, color=color, is_auto=True,
@@ -2351,12 +2397,13 @@ class LiveGraphWindow:
 
     def _auto_mark_config(self, stage_key):
         """Configuration for built-in markers from user settings."""
+        colors = get_palette(getattr(self, 'theme_mode', 'dark') == 'light')
         defaults = {
-            'arom': ('#85E889', '★ СМЕНА ВИАЛЫ — SAT → AROM', 'ОБНАРУЖЕН ПЕРЕХОД SAT → AROM\nСМЕНИТЕ ПРИЁМНУЮ ВИАЛУ'),
-            'br': ('#FFAA00', '★ СМЕНА ВИАЛЫ — AROM → BR', 'ОБНАРУЖЕН ПЕРЕХОД AROM → BR\nСМЕНИТЕ ПРИЁМНУЮ ВИАЛУ'),
-            'abr': ('#B94A55', '★ СМЕНА ВИАЛЫ — BR → ABR', 'ОБНАРУЖЕН ПЕРЕХОД BR → ABR\nСМЕНИТЕ ПРИЁМНУЮ ВИАЛУ'),
+            'arom': (colors['success'], 'Смена виалы · SAT → AROM', 'Обнаружен переход SAT → AROM\nСмените приёмную виалу'),
+            'br': (colors['warning'], 'Смена виалы · AROM → BR', 'Обнаружен переход AROM → BR\nСмените приёмную виалу'),
+            'abr': (colors['danger'], 'Смена виалы · BR → ABR', 'Обнаружен переход BR → ABR\nСмените приёмную виалу'),
         }
-        def_color, def_label, def_msg = defaults.get(stage_key, ('#44FF44', 'СМЕНА ВИАЛЫ', 'СМЕНИТЕ ПРИЁМНУЮ ВИАЛУ'))
+        def_color, def_label, def_msg = defaults.get(stage_key, (colors['success'], 'Смена виалы', 'Смените приёмную виалу'))
         cfg = self.notification_settings or {}
         color = str(cfg.get(f'auto_mark_{stage_key}_color', def_color))
         label = str(cfg.get(f'auto_mark_{stage_key}_label', def_label))
@@ -2739,8 +2786,8 @@ class LiveGraphWindow:
             return None
 
     def _show_toast(self, message):
-        self.pts_label.setText(f"📌 {message}")
-        self.QtCore.QTimer.singleShot(3000, lambda: self.pts_label.setText(f'PTS:{self._cached_pts}'))
+        self.pts_label.setText(str(message))
+        self.QtCore.QTimer.singleShot(3000, lambda: self.pts_label.setText(f'Точки · {self._cached_pts}'))
 
     def _refresh_plot(self):
         if not self._has_plot_data():
@@ -2783,7 +2830,7 @@ class LiveGraphWindow:
 
     def _on_log_toggle(self, checked):
         self.show_log = bool(checked)
-        self.log_btn.setText('LOGS · B/R · B/G' if checked else 'LOGS OFF')
+        self.log_btn.setText('Log B/R · B/G' if checked else 'Log выключен')
         # Logs are independent graph items. Never hide their parent container,
         # because the plots themselves live in the main grid.
         for item in getattr(self, '_graph_items', []):
@@ -2794,7 +2841,7 @@ class LiveGraphWindow:
 
     def _on_track_toggled(self, checked):
         self._autoscroll = checked
-        self.track_btn.setText('TRACK' if checked else 'MANUAL')
+        self.track_btn.setText('Автообзор' if checked else 'Ручной режим')
         if checked:
             self._refresh_plot()
 
@@ -2805,7 +2852,7 @@ class LiveGraphWindow:
         try:
             self.track_btn.blockSignals(True)
             self.track_btn.setChecked(False)
-            self.track_btn.setText('MANUAL')
+            self.track_btn.setText('Ручной режим')
             source_plot = None
             for item in getattr(self, '_graph_items', []):
                 widget = item.get('widget')
@@ -2825,7 +2872,7 @@ class LiveGraphWindow:
         self._autoscroll = True
         self.track_btn.blockSignals(True)
         self.track_btn.setChecked(True)
-        self.track_btn.setText('TRACK')
+        self.track_btn.setText('Автообзор')
         self.track_btn.blockSignals(False)
         self._refresh_plot()
         self._show_toast("🔄 TRACK: автообзор графика")
@@ -2835,7 +2882,7 @@ class LiveGraphWindow:
         old_mode = self.unit_mode
         index = order.index(old_mode)
         self.unit_mode = order[(index + 1) % len(order)]
-        self.unit_btn.setText(f'TIME · {self.unit_mode}')
+        self.unit_btn.setText(f'ВРЕМЯ · {self.unit_mode}')
         self._update_axis_labels()
         self.log_plot.setLabel('bottom', 'Time', units=self.unit_mode)
 
@@ -2862,10 +2909,10 @@ class LiveGraphWindow:
     def _on_pick_mode_toggled(self, checked):
         self._pick_annotation_mode = checked
         if checked:
-            self.ann_pick_btn.setText('📍 Click...')
+            self.ann_pick_btn.setText('Выберите точку')
             self._show_toast('Кликните на график для метки')
         else:
-            self.ann_pick_btn.setText('📍 Pick')
+            self.ann_pick_btn.setText('По точке')
 
     def _on_plot_mouse_clicked(self, evt, widget):
         try:
@@ -2927,10 +2974,10 @@ class LiveGraphWindow:
     def _on_fullscreen(self):
         if self.fs_btn.isChecked():
             self.win.showFullScreen()
-            self.fs_btn.setText('EXIT')
+            self.fs_btn.setText('Оконный режим')
         else:
             self.win.showNormal()
-            self.fs_btn.setText('FULL')
+            self.fs_btn.setText('На весь экран')
 
         # The native window may commit its new geometry one event-loop turn
         # after showFullScreen()/showNormal().  Rebuild after that geometry is
@@ -2946,13 +2993,13 @@ class LiveGraphWindow:
         if now <= self._stop_confirm_deadline:
             self.stop_requested = True
             self.stop_btn.setEnabled(False)
-            self.stop_btn.setText('⏳ STOP...')
+            self.stop_btn.setText('Сохраняем…')
             self._show_toast('Остановка анализа. Сначала сохраняется CSV/Excel...')
             return
 
         self._stop_confirm_deadline = now + 5.0
-        self.stop_btn.setText('⏹ ЕЩЁ РАЗ ДЛЯ STOP')
-        self.stop_btn.setStyleSheet('background-color: #B45309; color: white; font-weight: bold; border-radius: 8px;')
+        self.stop_btn.setText('Нажмите ещё раз для остановки')
+        self.stop_btn.setStyleSheet(f'background-color: {get_palette(self.theme_mode == "light")["warning"]}; color: {get_palette(self.theme_mode == "light")["accent_on"]}; font-weight: bold; border: none; border-radius: 8px;')
         self._show_toast('Для остановки нажмите STOP ещё раз в течение 5 секунд')
         self.QtCore.QTimer.singleShot(5200, self._reset_stop_button_if_needed)
 
@@ -2961,8 +3008,8 @@ class LiveGraphWindow:
             return
         if time.time() > self._stop_confirm_deadline:
             self._stop_confirm_deadline = 0.0
-            self.stop_btn.setText('⏹ STOP')
-            self.stop_btn.setStyleSheet('background-color: #DC2626; color: white; font-weight: bold; border-radius: 8px;')
+            self.stop_btn.setText('Остановить')
+            self.stop_btn.setStyleSheet(f'background-color: {get_palette(self.theme_mode == "light")["danger"]}; color: {get_palette(self.theme_mode == "light")["danger_on"]}; font-weight: bold; border: none; border-radius: 8px;')
 
     def take_video_resize_request(self):
         factor = self._video_resize_request
@@ -3005,10 +3052,10 @@ class LiveGraphWindow:
             if hasattr(self, 'player_play_btn'):
                 if is_paused:
                     self.player_play_btn.setText('▶ СТАРТ')
-                    self.player_play_btn.setStyleSheet('background-color: #2E7D32; color: #FFFFFF; font-weight: bold; border-radius: 8px;')
+                    self.player_play_btn.setStyleSheet(f'background-color: {get_palette(self.theme_mode == "light")["success_soft"]}; color: {get_palette(self.theme_mode == "light")["success"]}; font-weight: bold; border: none; border-radius: 8px;')
                 else:
                     self.player_play_btn.setText('⏸ ПАУЗА')
-                    self.player_play_btn.setStyleSheet('background-color: #B45309; color: #FFFFFF; font-weight: bold; border-radius: 8px;')
+                    self.player_play_btn.setStyleSheet(f'background-color: {get_palette(self.theme_mode == "light")["warning_soft"]}; color: {get_palette(self.theme_mode == "light")["warning"]}; font-weight: bold; border: none; border-radius: 8px;')
 
             if hasattr(self, 'player_speed_combo'):
                 for idx in range(self.player_speed_combo.count()):
@@ -3044,7 +3091,7 @@ class LiveGraphWindow:
         """Отображает вертикальный визир текущего момента видео на всех активных графиках."""
         try:
             x_pos = self._ms_to_display(float(time_ms))
-            pen = self.pg.mkPen('#38BDF8', width=2.5, style=self.QtCore.Qt.SolidLine)
+            pen = self.pg.mkPen(get_palette(self.theme_mode == 'light')['accent'], width=2.3, style=self.QtCore.Qt.SolidLine)
 
             plots = [self.plot, self.log_plot, self.log_bg_plot, self.rgb_sum_slope_plot, self.transition_score_plot]
             for item in getattr(self, 'custom_graphs', []):

@@ -26,6 +26,7 @@ from ..config import (
     DEFAULT_DETECTOR_PRESETS, DEFAULT_AUTO_MARK_COOLDOWN_SEC, DEFAULT_PLAYER_HUD_METRICS
 )
 from ..utils.helpers import is_miicam_source
+from .theme import get_palette
 
 APP_SETTINGS_FILE = "config.json"
 
@@ -136,7 +137,7 @@ DEFAULT_CONFIG = {
     "auto_stop_file": True,
     "playback_speed": 1.0,
     "seek_step_sec": 5,
-    "light_theme": False,
+    "light_theme": True,
 }
 
 NOTIFICATION_DEFAULTS = DEFAULT_CONFIG
@@ -234,82 +235,99 @@ class SettingsWindow:
         except Exception:
             pass
 
-        light = bool(self.config.get("light_theme", False))
-        bg = "#F2F3F8" if light else "#0E121B"
-        panel = "#FFFFFF" if light else "#111827"
-        fg = "#0E121B" if light else "#FFFFFF"
-        border = "#C6CDE1" if light else "#2A3451"
-        accent = "#2A3451" if light else "#A1ADCE"
+        light = bool(self.config.get("light_theme", True))
+        colors = get_palette(light)
+        bg = colors['background']
+        panel = colors['surface']
+        panel_alt = colors['surface_alt']
+        fg = colors['text']
+        muted = colors['muted']
+        border = colors['border']
+        accent = colors['accent']
 
         self.win.configure(bg=bg)
-        style.configure(".", background=bg, foreground=fg, font=("Segoe UI", 10))
-        style.configure("TFrame", background=bg)
-        style.configure("TLabel", background=bg, foreground=fg)
-        style.configure("TNotebook", background=bg, borderwidth=0)
-        style.configure("TNotebook.Tab", background=panel, foreground=fg, padding=(12, 7))
-        style.map("TNotebook.Tab", background=[("selected", "#2A3451" if light else "#1C2336")],
-                  foreground=[("selected", "#FFFFFF")])
-        style.configure("TEntry", fieldbackground=panel, foreground=fg,
-                        bordercolor=border, lightcolor=border, darkcolor=border,
-                        insertcolor=fg, insertwidth=2)
-        style.map("TEntry", fieldbackground=[("focus", panel)], foreground=[("focus", fg)])
-        style.configure("TSpinbox", fieldbackground=panel, foreground=fg,
-                        background=panel, arrowcolor=accent,
-                        bordercolor=border, lightcolor=border, darkcolor=border,
-                        insertcolor=fg, insertwidth=2)
-        style.map("TSpinbox",
-                  fieldbackground=[("focus", panel), ("active", panel)],
-                  foreground=[("focus", fg), ("active", fg)],
-                  background=[("focus", panel), ("active", panel)],
-                  arrowcolor=[("focus", accent), ("active", accent)])
-        style.configure("TCombobox", fieldbackground=panel, background=panel,
-                        foreground=fg, arrowcolor=accent,
+        style.configure('.', background=bg, foreground=fg, font=('Segoe UI', 10))
+        style.configure('TFrame', background=bg)
+        style.configure('App.TFrame', background=bg)
+        style.configure('Header.TFrame', background=panel, relief='solid', borderwidth=1,
                         bordercolor=border, lightcolor=border, darkcolor=border)
-        style.map("TCombobox",
-                  fieldbackground=[("readonly", panel), ("focus", panel), ("active", panel)],
-                  foreground=[("readonly", fg), ("focus", fg), ("active", fg)],
-                  background=[("readonly", panel), ("focus", panel), ("active", panel)])
-        style.configure("TCheckbutton", background=bg, foreground=fg)
-        style.map("TCheckbutton", background=[("active", bg), ("pressed", bg), ("focus", bg)],
-                  foreground=[("active", fg), ("pressed", fg), ("focus", fg)])
-        style.configure("TLabelframe", background=bg, foreground=accent, bordercolor=border)
-        style.configure("TLabelframe.Label", background=bg, foreground=accent, font=("Segoe UI", 10, "bold"))
-        
-        # Treeview styling with fixed dark-mode active header
-        style.configure("Treeview", background=panel, fieldbackground=panel,
-                        foreground=fg, bordercolor=border, rowheight=24)
-        style.map("Treeview", background=[("selected", "#2A3451" if light else "#2563EB")],
-                  foreground=[("selected", "#FFFFFF")])
+        style.configure('BrandMark.TLabel', background=accent, foreground=colors['accent_on'],
+                        font=('Segoe UI', 14, 'bold'), padding=(9, 5))
+        style.configure('HeaderTitle.TLabel', background=panel, foreground=fg,
+                        font=('Segoe UI', 15, 'bold'))
+        style.configure('HeaderSub.TLabel', background=panel, foreground=muted,
+                        font=('Segoe UI', 9))
+        style.configure('TLabel', background=bg, foreground=fg)
+        style.configure('TNotebook', background=bg, borderwidth=0, tabmargins=(0, 0, 0, 0))
+        style.configure('TNotebook.Tab', background=panel_alt, foreground=muted,
+                        padding=(13, 9), borderwidth=0, font=('Segoe UI', 9, 'bold'))
+        style.map('TNotebook.Tab', background=[('selected', colors['accent_soft']), ('active', colors['surface_hover'])],
+                  foreground=[('selected', accent), ('active', fg)])
+        style.configure('TEntry', fieldbackground=panel_alt, foreground=fg, padding=(8, 6),
+                        bordercolor=border, lightcolor=border, darkcolor=border,
+                        insertcolor=fg, insertwidth=2)
+        style.map('TEntry', fieldbackground=[('focus', panel)], foreground=[('focus', fg)])
+        style.configure('TSpinbox', fieldbackground=panel_alt, foreground=fg,
+                        background=panel_alt, arrowcolor=muted, padding=(6, 5),
+                        bordercolor=border, lightcolor=border, darkcolor=border,
+                        insertcolor=fg, insertwidth=2)
+        style.map('TSpinbox', fieldbackground=[('focus', panel), ('active', panel)],
+                  foreground=[('focus', fg), ('active', fg)],
+                  background=[('focus', panel), ('active', panel)],
+                  arrowcolor=[('focus', accent), ('active', accent)])
+        style.configure('TCombobox', fieldbackground=panel_alt, background=panel_alt,
+                        foreground=fg, arrowcolor=muted, padding=(7, 5),
+                        bordercolor=border, lightcolor=border, darkcolor=border)
+        style.map('TCombobox', fieldbackground=[('readonly', panel_alt), ('focus', panel), ('active', panel)],
+                  foreground=[('readonly', fg), ('focus', fg), ('active', fg)],
+                  background=[('readonly', panel_alt), ('focus', panel), ('active', panel)],
+                  arrowcolor=[('focus', accent), ('active', accent)])
+        style.configure('TButton', background=panel, foreground=fg, padding=(10, 7),
+                        borderwidth=1, bordercolor=border, font=('Segoe UI', 9, 'bold'))
+        style.map('TButton', background=[('pressed', colors['surface_hover']), ('active', colors['surface_hover'])],
+                  bordercolor=[('active', accent)], foreground=[('disabled', muted)])
+        style.configure('Primary.TButton', background=accent, foreground=colors['accent_on'],
+                        padding=(13, 9), borderwidth=0, font=('Segoe UI', 9, 'bold'))
+        style.map('Primary.TButton', background=[('pressed', colors['accent_hover']), ('active', colors['accent_hover'])])
+        style.configure('Quiet.TButton', background=panel, foreground=fg, padding=(10, 7),
+                        borderwidth=1, bordercolor=border, font=('Segoe UI', 9, 'bold'))
+        style.map('Quiet.TButton', background=[('pressed', colors['surface_hover']), ('active', colors['surface_hover'])],
+                  bordercolor=[('active', accent)])
+        style.configure('TCheckbutton', background=panel, foreground=fg, padding=(4, 4))
+        style.map('TCheckbutton', background=[('active', panel), ('pressed', panel)],
+                  foreground=[('active', fg), ('pressed', fg)])
+        style.configure('TRadiobutton', background=panel, foreground=fg, padding=(5, 4))
+        style.map('TRadiobutton', background=[('active', panel_alt), ('pressed', panel_alt)],
+                  foreground=[('active', fg), ('pressed', fg)])
+        style.configure('TLabelframe', background=panel, foreground=fg, bordercolor=border,
+                        lightcolor=border, darkcolor=border, relief='solid', borderwidth=1)
+        style.configure('TLabelframe.Label', background=panel, foreground=fg,
+                        font=('Segoe UI', 10, 'bold'), padding=(4, 0))
+        style.configure('Treeview', background=panel, fieldbackground=panel,
+                        foreground=fg, bordercolor=border, rowheight=29, font=('Segoe UI', 9))
+        style.map('Treeview', background=[('selected', colors['accent_soft'])],
+                  foreground=[('selected', accent)])
+        style.configure('Treeview.Heading', background=panel_alt, foreground=muted,
+                        font=('Segoe UI', 9, 'bold'), relief='flat', padding=(8, 7))
+        style.map('Treeview.Heading', background=[('active', colors['surface_hover'])],
+                  foreground=[('active', fg)])
+        style.configure('Vertical.TScrollbar', background=bg, troughcolor=bg,
+                        bordercolor=bg, arrowcolor=muted)
 
-        header_bg = "#E2E8F0" if light else "#1E293B"
-        header_active = "#CBD5E1" if light else "#334155"
-        header_fg = "#0E121B" if light else "#93C5FD"
-        style.configure(
-            "Treeview.Heading",
-            background=header_bg,
-            foreground=header_fg,
-            font=("Segoe UI", 9, "bold"),
-            relief="flat",
-            padding=4
-        )
-        style.map(
-            "Treeview.Heading",
-            background=[("active", header_active), ("pressed", header_active)],
-            foreground=[("active", header_fg), ("pressed", header_fg)]
-        )
+        outer = ttk.Frame(self.win, padding=16, style='App.TFrame')
+        outer.pack(fill='both', expand=True)
 
-        outer = ttk.Frame(self.win, padding=12)
-        outer.pack(fill="both", expand=True)
-
-        header_frame = ttk.Frame(outer)
-        header_frame.pack(fill="x", pady=(0, 8))
-        ttk.Label(
-            header_frame, text="⚙️ Настройки и параметры анализа",
-            font=("Segoe UI", 15, "bold")
-        ).pack(side="left")
+        header_frame = ttk.Frame(outer, style='Header.TFrame', padding=(16, 12))
+        header_frame.pack(fill='x', pady=(0, 12))
+        ttk.Label(header_frame, text='E', style='BrandMark.TLabel', anchor='center').pack(side='left')
+        header_copy = ttk.Frame(header_frame, style='Header.TFrame')
+        header_copy.pack(side='left', padx=(11, 0))
+        ttk.Label(header_copy, text='Настройки анализа', style='HeaderTitle.TLabel').pack(anchor='w')
+        ttk.Label(header_copy, text='Видео · графики · ROI · автометки · производительность',
+                  style='HeaderSub.TLabel').pack(anchor='w', pady=(2, 0))
 
         nb = ttk.Notebook(outer)
-        nb.pack(fill="both", expand=True)
+        nb.pack(fill='both', expand=True)
         self.nb = nb
 
         tab_video = ttk.Frame(nb, padding=14)
@@ -320,13 +338,13 @@ class SettingsWindow:
             tab_detector = ttk.Frame(nb, padding=14)
         tab_perf = ttk.Frame(nb, padding=14)
 
-        nb.add(tab_video, text="🎥 Видео и запись")
-        nb.add(tab_graphs, text="📈 Графики и формулы")
-        nb.add(tab_roi, text="📐 Область ROI")
-        nb.add(tab_notif, text="🔔 Автометки")
+        nb.add(tab_video, text='Видео и запись')
+        nb.add(tab_graphs, text='Графики и формулы')
+        nb.add(tab_roi, text='Область ROI')
+        nb.add(tab_notif, text='Автометки')
         if self.is_miicam:
-            nb.add(tab_detector, text="💡 RGB-детектор")
-        nb.add(tab_perf, text="⚡ Производительность")
+            nb.add(tab_detector, text='RGB-детектор')
+        nb.add(tab_perf, text='Производительность')
 
         # =========================================================================
         # 1. TAB: ВИДЕО И ЗАПИСЬ
@@ -430,7 +448,10 @@ class SettingsWindow:
 
         var_list_frame = ttk.Frame(lf_vars)
         var_list_frame.pack(fill="x")
-        self.custom_var_list = tk.Listbox(var_list_frame, height=3, bg=panel, fg=fg, selectbackground="#2563EB")
+        self.custom_var_list = tk.Listbox(var_list_frame, height=3, bg=panel, fg=fg,
+                                          selectbackground=colors['accent_soft'], selectforeground=accent,
+                                          relief='flat', highlightthickness=1, highlightbackground=border,
+                                          font=('Segoe UI', 9), activestyle='none')
         self.custom_var_list.pack(fill="x", expand=True)
 
         # Block 2: Custom Graphs
@@ -441,7 +462,7 @@ class SettingsWindow:
         cg_top.pack(fill="x", pady=(0, 4))
         self.custom_name_var = tk.StringVar(value="Доля синего (%)")
         self.custom_formula_var = tk.StringVar(value="NORM_B * 100")
-        self.custom_color_var = tk.StringVar(value="#00FFCC")
+        self.custom_color_var = tk.StringVar(value=colors["success"])
 
         ttk.Label(cg_top, text="Название:").pack(side="left", padx=(0, 4))
         ttk.Entry(cg_top, textvariable=self.custom_name_var, width=16).pack(side="left", padx=(0, 8))
@@ -463,7 +484,10 @@ class SettingsWindow:
 
         cg_list_frame = ttk.Frame(lf_custom)
         cg_list_frame.pack(fill="both", expand=True, pady=(4, 0))
-        self.custom_graph_list = tk.Listbox(cg_list_frame, height=3, bg=panel, fg=fg, selectbackground="#2563EB")
+        self.custom_graph_list = tk.Listbox(cg_list_frame, height=3, bg=panel, fg=fg,
+                                            selectbackground=colors['accent_soft'], selectforeground=accent,
+                                            relief='flat', highlightthickness=1, highlightbackground=border,
+                                            font=('Segoe UI', 9), activestyle='none')
         self.custom_graph_list.pack(fill="both", expand=True)
 
         # =========================================================================
@@ -697,9 +721,9 @@ class SettingsWindow:
         btn_bar = ttk.Frame(outer)
         btn_bar.pack(fill="x", pady=(10, 0))
 
-        ttk.Button(btn_bar, text="↩ Сбросить по умолчанию", command=self._reset).pack(side="left")
-        ttk.Button(btn_bar, text="Отмена", command=self.win.destroy).pack(side="right", padx=(6, 0))
-        ttk.Button(btn_bar, text="💾 Сохранить и применить", command=self._apply).pack(side="right")
+        ttk.Button(btn_bar, text="Сбросить по умолчанию", command=self._reset, style='Quiet.TButton').pack(side="left")
+        ttk.Button(btn_bar, text="Отмена", command=self.win.destroy, style='Quiet.TButton').pack(side="right", padx=(6, 0))
+        ttk.Button(btn_bar, text="Сохранить и применить", command=self._apply, style='Primary.TButton').pack(side="right")
 
     def _build_detector_tab(self, tab_detector, light):
         self.detector_vars = {}
@@ -1701,7 +1725,7 @@ class SettingsWindow:
                 win = f"{t_min_m:.1f} - {t_max_m:.1f} мин" if t_max > 0 else f"от {t_min_m:.1f} мин (до конца)"
             else:
                 win = f"{t_min:g} - {t_max:g} с" if t_max > 0 else f"от {t_min:g} с (до конца)"
-            color = rule.get("color", "#85E889")
+            color = rule.get("color", get_palette(bool(self.config.get("light_theme", True)))["success"])
             sound = "🔊 Да" if rule.get("sound", True) else "Нет"
             self.custom_marks_tree.insert("", "end", iid=str(idx), values=(status, name, cond, win, color, sound))
 
@@ -1748,10 +1772,11 @@ class SettingsWindow:
         dlg.transient(self.win)
         dlg.grab_set()
 
-        light = bool(self.config.get("light_theme", False))
-        bg = "#F2F3F8" if light else "#0E121B"
-        panel = "#FFFFFF" if light else "#111827"
-        fg = "#0E121B" if light else "#FFFFFF"
+        light = bool(self.config.get("light_theme", True))
+        colors = get_palette(light)
+        bg = colors['background']
+        panel = colors['surface']
+        fg = colors['text']
         dlg.configure(bg=bg)
 
         frm = ttk.Frame(dlg, padding=16)
@@ -1764,7 +1789,7 @@ class SettingsWindow:
         name_var = tk.StringVar(value=rule.get("name", "Пользовательская метка"))
         ttk.Entry(r0, textvariable=name_var).pack(side="left", fill="x", expand=True, padx=(0, 10))
 
-        color_var = tk.StringVar(value=rule.get("color", "#85E889"))
+        color_var = tk.StringVar(value=rule.get("color", get_palette(bool(self.config.get("light_theme", True)))["success"]))
         color_preview = tk.Canvas(r0, width=24, height=22, bg=color_var.get(), highlightthickness=1)
         color_preview.pack(side="left", padx=(0, 6))
 
@@ -2041,7 +2066,7 @@ class SettingsWindow:
                 "t_max_sec": t_max_sec,
                 "cooldown_enabled": bool(cooldown_enabled_var.get()),
                 "cooldown_sec": cooldown_sec,
-                "color": color_var.get().strip() or "#85E889",
+                "color": color_var.get().strip() or get_palette(bool(self.config.get("light_theme", True)))["success"],
                 "sound": bool(sound_var.get()),
                 "notify": bool(notify_var.get()),
             }
@@ -2091,12 +2116,12 @@ class SettingsWindow:
             return
         self.custom_graph_list.delete(0, tk.END)
         for g in self._custom_graphs:
-            self.custom_graph_list.insert(tk.END, f"  📈 {g.get('name', 'График')}: {g.get('formula', '')} [{g.get('color', '#00FFCC')}]")
+            self.custom_graph_list.insert(tk.END, f"  📈 {g.get('name', 'График')}: {g.get('formula', '')} [{g.get('color', get_palette(bool(self.config.get('light_theme', True)))['accent'])}]")
 
     def _add_custom_graph(self):
         name = self.custom_name_var.get().strip()
         formula = self.custom_formula_var.get().strip()
-        color = self.custom_color_var.get().strip() or "#00FFCC"
+        color = self.custom_color_var.get().strip() or get_palette(bool(self.config.get("light_theme", True)))["accent"]
         if not name or not formula:
             messagebox.showwarning("Графики", "Укажите название и формулу графика.", parent=self.win)
             return
@@ -2120,16 +2145,17 @@ class SettingsWindow:
         dlg.transient(self.win)
         dlg.grab_set()
 
-        light = bool(self.config.get("light_theme", False))
-        bg = "#F2F3F8" if light else "#0E121B"
-        panel = "#FFFFFF" if light else "#111827"
-        fg = "#0E121B" if light else "#FFFFFF"
+        light = bool(self.config.get("light_theme", True))
+        colors = get_palette(light)
+        bg = colors['background']
+        panel = colors['surface']
+        fg = colors['text']
         dlg.configure(bg=bg)
 
         outer = ttk.Frame(dlg, padding=16)
         outer.pack(fill="both", expand=True)
 
-        ttk.Label(outer, text="📚 Инструкция по созданию формул и графиков", font=("Segoe UI", 13, "bold"), foreground="#3B82F6").pack(anchor="w", pady=(0, 8))
+        ttk.Label(outer, text="📚 Инструкция по созданию формул и графиков", font=("Segoe UI", 13, "bold"), foreground=get_palette(light)["accent"]).pack(anchor="w", pady=(0, 8))
 
         txt = tk.Text(outer, wrap="word", bg=panel, fg=fg, font=("Segoe UI", 9), relief="solid", borderwidth=1, padx=12, pady=10)
         scroll = ttk.Scrollbar(outer, orient="vertical", command=txt.yview)
