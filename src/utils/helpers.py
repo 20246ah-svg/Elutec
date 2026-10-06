@@ -220,14 +220,12 @@ def open_video_file_capture(file_path):
         path_candidates.insert(0, short_path)
 
     backends = []
-    if hasattr(cv2, 'CAP_ANY'):
-        backends.append(cv2.CAP_ANY)
-    if hasattr(cv2, 'CAP_MSMF'):
-        backends.append(cv2.CAP_MSMF)
     if hasattr(cv2, 'CAP_FFMPEG'):
         backends.append(cv2.CAP_FFMPEG)
-    if hasattr(cv2, 'CAP_DSHOW'):
-        backends.append(cv2.CAP_DSHOW)
+    if hasattr(cv2, 'CAP_MSMF'):
+        backends.append(cv2.CAP_MSMF)
+    if hasattr(cv2, 'CAP_ANY'):
+        backends.append(cv2.CAP_ANY)
     if not backends:
         backends.append(None)
 
@@ -321,7 +319,10 @@ def open_camera_device(index, width=None, height=None, max_attempts=15):
                     if ret and frame is not None and frame.size > 0:
                         return cap, frame, "MIICAM"
                     time.sleep(0.04)
-                return cap, None, "MIICAM"
+                try:
+                    cap.release()
+                except Exception:
+                    pass
         except Exception as e:
             print(f"⚠️ Ошибка open_camera_device (MiiCam): {e}")
         return None, None, "FAILED"
@@ -350,6 +351,14 @@ def open_camera_device(index, width=None, height=None, max_attempts=15):
                 except Exception:
                     pass
             continue
+
+        # Uncap high FPS for USB webcams by setting MJPG fourcc and 30/60 FPS
+        try:
+            fourcc = cv2.VideoWriter_fourcc(*'MJPG')
+            cap.set(cv2.CAP_PROP_FOURCC, fourcc)
+            cap.set(cv2.CAP_PROP_FPS, 30.0)
+        except Exception:
+            pass
 
         # Пытаемся задать разрешение, если указано
         if width and height:
@@ -578,6 +587,9 @@ def is_placeholder_frame(frame):
     gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
     if gray.mean() > 25:
         return False
+    # Completely black dummy buffer (0 or near 0 max pixel)
+    if float(frame.max()) < 2.0:
+        return True
     _, bright = cv2.threshold(gray, 200, 255, cv2.THRESH_BINARY)
     return cv2.countNonZero(bright) > 500
 
@@ -595,34 +607,62 @@ def camera_label(index, width, height, backend, has_stream=True, win_names=None)
 
 def scan_cameras(max_index=6):
     available = []
+    _cv_log_level = None
+    try:
+        if hasattr(cv2, "getLogLevel"):
+            _cv_log_level = cv2.getLogLevel()
+        if hasattr(cv2, "setLogLevel"):
+            cv2.setLogLevel(2)  # suppress harmless FFmpeg/DirectShow WARN noise during enumeration
+    except Exception:
+        pass
     win_names = get_windows_camera_names()
     print("🔍 Сканирование камер...")
     if win_names:
         print("📷 Устройства Windows:", ", ".join(win_names))
-    for i in range(max_index):
+
+    def _probe_index(i):
         try:
-            cap, frame, backend = open_camera_device(i, width=None, height=None, max_attempts=8)
+            cap, frame, backend = open_camera_device(i, width=None, height=None, max_attempts=4)
             if cap is not None and cap.isOpened():
                 if frame is not None and frame.size > 0:
                     h, w = frame.shape[:2]
                     has_stream = not is_placeholder_frame(frame)
                     label = camera_label(i, w, h, backend, has_stream, win_names)
-                    available.append((str(i), label))
-                    if has_stream:
-                        print(f"✅ [{i}] {label}")
-                    else:
-                        print(f"⚠️ [{i}] {label}")
+                    try:
+                        cap.release()
+                    except Exception:
+                        pass
+                    return (str(i), label, has_stream)
                 else:
                     label = camera_label(i, 640, 480, backend, False, win_names)
-                    available.append((str(i), label))
-                try:
-                    cap.release()
-                except Exception:
-                    pass
-                time.sleep(0.04)
+                    try:
+                        cap.release()
+                    except Exception:
+                        pass
+                    return (str(i), label, False)
         except Exception as e:
             print(f"⚠️ Ошибка проверки камеры [{i}]: {e}")
+        return None
+
+    import concurrent.futures
+    with concurrent.futures.ThreadPoolExecutor(max_workers=min(4, max(1, max_index))) as executor:
+        futures = {executor.submit(_probe_index, i): i for i in range(max_index)}
+        for future in concurrent.futures.as_completed(futures):
+            res = future.result()
+            if res is not None:
+                src_str, lbl, has_stream = res
+                available.append((src_str, lbl))
+                if has_stream:
+                    print(f"✅ [{src_str}] {lbl}")
+                else:
+                    print(f"⚠️ [{src_str}] {lbl}")
+
     available.sort(key=lambda item: (camera_priority(item[1]), int(item[0]) if item[0].isdigit() else 99))
+    try:
+        if _cv_log_level is not None and hasattr(cv2, "setLogLevel"):
+            cv2.setLogLevel(_cv_log_level)
+    except Exception:
+        pass
     return available
 
 def get_local_ip():
@@ -683,6 +723,8 @@ def ivcam_setup_hint():
     )
 
                                                                    
+_ROI_MASK_CACHE = {}
+
 def compute_roi_means(frame, config):
     x = config['roi_x']
     y = config['roi_y']
@@ -698,13 +740,28 @@ def compute_roi_means(frame, config):
     roi = frame[safe_y:safe_y + safe_h, safe_x:safe_x + safe_w]
 
     if config.get('roi_shape', 'rect') == 'circle':
-        mask = np.zeros((safe_h, safe_w), dtype=np.uint8)
-        radius = min(safe_w, safe_h) // 2
-        center = (safe_w // 2, safe_h // 2)
-        cv2.circle(mask, center, radius, 255, -1)
+        mask_key = (int(safe_w), int(safe_h))
+        mask = _ROI_MASK_CACHE.get(mask_key)
+        if mask is None:
+            mask = np.zeros((safe_h, safe_w), dtype=np.uint8)
+            radius = min(safe_w, safe_h) // 2
+            center = (safe_w // 2, safe_h // 2)
+            cv2.circle(mask, center, radius, 255, -1)
+            if len(_ROI_MASK_CACHE) >= 32:
+                _ROI_MASK_CACHE.pop(next(iter(_ROI_MASK_CACHE)))
+            _ROI_MASK_CACHE[mask_key] = mask
         mean_b, mean_g, mean_r, _ = cv2.mean(roi, mask=mask)
     else:
         mean_b, mean_g, mean_r, _ = cv2.mean(roi)
+
+    # Optional software color calibration gains (White Balance normalization)
+    wb_r_mult = float(config.get('wb_r_mult', 1.0))
+    wb_g_mult = float(config.get('wb_g_mult', 1.0))
+    wb_b_mult = float(config.get('wb_b_mult', 1.0))
+    if wb_r_mult != 1.0 or wb_g_mult != 1.0 or wb_b_mult != 1.0:
+        mean_r = max(0.0, min(255.0, mean_r * wb_r_mult))
+        mean_g = max(0.0, min(255.0, mean_g * wb_g_mult))
+        mean_b = max(0.0, min(255.0, mean_b * wb_b_mult))
 
     return mean_b, mean_g, mean_r, safe_x, safe_y, safe_w, safe_h, h_f, w_f
 

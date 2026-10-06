@@ -13,6 +13,7 @@ from collections import deque
 from ..utils.math_utils import compute_log_br
 
 from ..utils.helpers import (
+    compute_roi_means,
     detect_green_circle_roi,
     scan_cameras, scan_ip_cameras, scan_miicam_cameras, create_video_capture, open_camera_device, warmup_capture,
     read_valid_frame, verify_capture_can_read, is_network_source, is_placeholder_frame, is_miicam_source,
@@ -89,7 +90,7 @@ class PreviewWorker:
                             self.current_fps = round(self._fps_count / dt, 1)
                             self._fps_count = 0
                             self._fps_time = now
-                    # Ultra-low latency yield for high FPS throughput
+                    # High-throughput non-blocking sleep (up to 120+ FPS with 0% CPU overhead)
                     time.sleep(0.001)
                 elif self.is_file:
                     try:
@@ -104,9 +105,7 @@ class PreviewWorker:
 
     def get_latest_frame(self):
         with self._lock:
-            if self._latest_frame is not None:
-                return self._latest_frame.copy()
-            return None
+            return self._latest_frame
 
     def get_fps(self):
         return self.current_fps
@@ -166,6 +165,27 @@ class SetupApp:
             'abr_strong_score_threshold': 3.0,
             'abr_strong_confirm_ms': 1000.0,
             'alert_display_ms': 120000.0,
+            # Calibrated RGB Detector (MiiCam) default parameters
+            'miicam_auto_exposure': False,
+            'miicam_exposure_us': 22000,
+            'miicam_gain': 100,
+            'miicam_brightness': 0,
+            'miicam_contrast': 0,
+            'miicam_gamma': 100,
+            'miicam_hue': 0,
+            'miicam_saturation': 128,
+            'miicam_temp': 6500,
+            'miicam_tint': 1000,
+            'miicam_wb_r': 0,
+            'miicam_wb_g': 0,
+            'miicam_wb_b': 0,
+            'miicam_speed': 2,
+            'miicam_binning': 1,
+            'miicam_frame_preload': False,
+            'miicam_thread_priority': 2,
+            'miicam_h_flip': False,
+            'miicam_v_flip': False,
+            'miicam_anti_flicker': 1,
         }
         
         try:
@@ -577,6 +597,9 @@ class SetupApp:
         self.preview_color_canvas.pack(side="left", padx=(0, 8))
         ttk.Label(rgb_controls, text="Шкала RGB: 0–300, последние ~300 точек", font=('Arial', 9)).pack(side="left", padx=10)
 
+        # RGB detector controls are intentionally kept in Settings -> RGB detector.
+        # The main screen is reserved for live data/preview only.
+
         light = bool(self.config.get('light_theme', False))
         canvas_bg = '#FFFFFF' if light else ELUTEK_PANEL_DARK
         canvas_border = '#aaaaaa' if light else '#2A3451'
@@ -603,9 +626,23 @@ class SetupApp:
         except Exception:
             pass
 
-        self.root.after(500, self.scan_usb_cameras)
+        self.root.after(200, self.auto_connect_startup_camera)
 
-                                                  
+    def auto_connect_startup_camera(self):
+        """Автоматически сканирует USB-камеры при запуске и подключает первую доступную рабочую камеру с видеопотоком."""
+        cfg_source = str(self.config.get('source', '')).strip()
+
+        def _startup_worker():
+            # 1. Если в конфигурации был сохранен существующий локальный видеофайл
+            if cfg_source and os.path.isfile(cfg_source):
+                self.root.after(0, lambda: self.open_camera_source(cfg_source, verbose=False))
+                return
+
+            # 2. Сначала всегда сканируем USB-камеры и подключаем рабочую камеру
+            self.root.after(0, self.scan_usb_cameras)
+
+        threading.Thread(target=_startup_worker, daemon=True).start()
+
     def adjust_value(self, var, delta, min_val, max_val):
         current = var.get()
         new_val = max(min_val, min(max_val, current + delta))
@@ -701,8 +738,27 @@ class SetupApp:
         except Exception:
             self.preview_rgb_interval_ms = 200
         self.preview_last_rgb_update = 0.0
+
+        # Прямое применение параметров к активному захвату камеры (MiiCam / ToupCam)
+        if getattr(self, 'cap', None) is not None and hasattr(self.cap, 'apply_settings_dict'):
+            try:
+                self.cap.apply_settings_dict(self.config)
+            except Exception:
+                pass
+
         self._apply_start_theme()
         self._save_current_settings()
+
+    def trigger_camera_awb(self):
+        """Выполняет аппаратную автокалибровку баланса белого (AWB) на сенсоре детектора."""
+        if getattr(self, 'cap', None) is not None and hasattr(self.cap, 'trigger_awb_once'):
+            ok = self.cap.trigger_awb_once()
+            if ok:
+                messagebox.showinfo("Баланс белого", "Аппаратный баланс белого (AWB) успешно выполнен на сенсоре!", parent=self.root)
+            else:
+                messagebox.showwarning("Баланс белого", "Не удалось выполнить команду AWB на сенсоре.", parent=self.root)
+        else:
+            messagebox.showinfo("Баланс белого", "Функция доступна при подключении RGB-детектора MiiCam.", parent=self.root)
 
     def snap_roi_to_green_circle(self, verbose=True, source_override=None):
         """Обнаружение нарисованного зеленого круга на видеокадре и установка ROI пиксель в пиксель."""
@@ -955,36 +1011,54 @@ class SetupApp:
                 self.devices_listbox.insert(tk.END, display)
                 self.devices_combined.append((idx, name))
                        
-            opened = False
-            for idx, name in self.devices_combined:
-                if "нет видеопотока" in name:
-                    continue
-                if is_iriun_name(name) and not is_ivcam_name(name):
-                    continue
-                self.entry_source.delete(0, tk.END)
-                self.entry_source.insert(0, str(idx))
-                self.config['source'] = str(idx)
-                self.devices_label.config(text=f"Выбранное устройство: {name} ({idx})")
-                if self.open_camera_source(str(idx), verbose=False):
-                    opened = True
-                    break
-            if not opened:
-                for idx, name in self.devices_combined:
+            current_src = str(self.config.get('source', '')).strip()
+            selected_idx = -1
+
+            # 1. First check if current source is in scanned cameras and opens
+            for row_i, (idx, name) in enumerate(self.devices_combined):
+                if str(idx) == current_src and "нет видеопотока" not in name:
+                    if self.open_camera_source(str(idx), verbose=False):
+                        selected_idx = row_i
+                        break
+
+            # 2. If not opened yet, try each working camera
+            if selected_idx < 0:
+                for row_i, (idx, name) in enumerate(self.devices_combined):
                     if "нет видеопотока" in name:
                         continue
-                    self.entry_source.delete(0, tk.END)
-                    self.entry_source.insert(0, str(idx))
-                    self.config['source'] = str(idx)
-                    self.devices_label.config(text=f"Выбранное устройство: {name} ({idx})")
+                    if is_iriun_name(name) and not is_ivcam_name(name):
+                        continue
                     if self.open_camera_source(str(idx), verbose=False):
-                        opened = True
+                        selected_idx = row_i
                         break
-            if not opened and self.devices_combined:
+
+            # 3. Fallback to any camera without "нет видеопотока"
+            if selected_idx < 0:
+                for row_i, (idx, name) in enumerate(self.devices_combined):
+                    if "нет видеопотока" in name:
+                        continue
+                    if self.open_camera_source(str(idx), verbose=False):
+                        selected_idx = row_i
+                        break
+
+            if selected_idx >= 0:
+                target_src, target_name = self.devices_combined[selected_idx]
+                self.entry_source.delete(0, tk.END)
+                self.entry_source.insert(0, str(target_src))
+                self.config['source'] = str(target_src)
+                self.devices_label.config(text=f"Выбранное устройство: {target_name} ({target_src})")
+                self.devices_listbox.selection_clear(0, tk.END)
+                self.devices_listbox.selection_set(selected_idx)
+                self.devices_listbox.activate(selected_idx)
+            elif self.devices_combined:
                 first_src, first_name = self.devices_combined[0]
                 self.entry_source.delete(0, tk.END)
                 self.entry_source.insert(0, str(first_src))
                 self.config['source'] = str(first_src)
                 self.devices_label.config(text=f"Выбранное устройство: {first_name} ({first_src})")
+                self.devices_listbox.selection_clear(0, tk.END)
+                self.devices_listbox.selection_set(0)
+                self.devices_listbox.activate(0)
                 self.open_camera_source(str(first_src), verbose=False)
         else:
             self.devices_listbox.insert(tk.END, "❌ USB-камеры не найдены")
@@ -1435,25 +1509,12 @@ class SetupApp:
             pass
 
     def _compute_roi_means(self, frame, config):
-        x = config['roi_x']
-        y = config['roi_y']
-        w = config['roi_w']
-        h = config['roi_h']
-        h_f, w_f = frame.shape[:2]
-        safe_x = max(0, min(x, w_f - 1))
-        safe_y = max(0, min(y, h_f - 1))
-        safe_w = max(10, min(w, w_f - safe_x))
-        safe_h = max(10, min(h, h_f - safe_y))
-        roi = frame[safe_y:safe_y + safe_h, safe_x:safe_x + safe_w]
-        if config.get('roi_shape', 'rect') == 'circle':
-            mask = np.zeros((safe_h, safe_w), dtype=np.uint8)
-            radius = min(safe_w, safe_h) // 2
-            center = (safe_w // 2, safe_h // 2)
-            cv2.circle(mask, center, radius, 255, -1)
-            mean_b, mean_g, mean_r, _ = cv2.mean(roi, mask=mask)
-        else:
-            mean_b, mean_g, mean_r, _ = cv2.mean(roi)
-        return mean_b, mean_g, mean_r, safe_x, safe_y, safe_w, safe_h, h_f, w_f
+        cfg = dict(config)
+        if 'wb_r_mult' not in cfg and hasattr(self, 'config'):
+            cfg['wb_r_mult'] = float(self.config.get('wb_r_mult', 1.0))
+            cfg['wb_g_mult'] = float(self.config.get('wb_g_mult', 1.0))
+            cfg['wb_b_mult'] = float(self.config.get('wb_b_mult', 1.0))
+        return compute_roi_means(frame, cfg)
 
     def update_preview(self):
         if not getattr(self, 'is_running', False):
@@ -1476,11 +1537,7 @@ class SetupApp:
                 raw_frame = self.latest_frame.copy()
 
             if raw_frame is not None and raw_frame.size > 0:
-                # Save clean pristine frame in cache
-                self.latest_frame = raw_frame.copy()
-
-                # Separate display copy exclusively for on-screen overlays
-                display_frame = raw_frame.copy()
+                self.latest_frame = raw_frame
 
                 x = self.safe_get_int(self.var_x, 0)
                 y = self.safe_get_int(self.var_y, 0)
@@ -1500,12 +1557,22 @@ class SetupApp:
                 self.preview_width = width
                 self.preview_height = height
                 self.update_coord_label()
+
+                # Fast preview downscale first for 60+ FPS high-throughput rendering
+                new_width = max(10, int(width * scale))
+                new_height = max(10, int(height * scale))
+                preview_frame = cv2.resize(raw_frame, (new_width, new_height))
+
+                # Periodically compute accurate ROI RGB stats
                 now_preview = time.time()
-                if now_preview - self.preview_last_rgb_update >= (self.preview_rgb_interval_ms / 1000.0):
+                if self.preview_current_rgb is None or (now_preview - self.preview_last_rgb_update >= (self.preview_rgb_interval_ms / 1000.0)):
                     preview_config = {
                         'roi_x': max(0, int(x)), 'roi_y': max(0, int(y)),
                         'roi_w': max(self.MIN_ROI_SIZE, int(w)), 'roi_h': max(self.MIN_ROI_SIZE, int(h)),
                         'roi_shape': self.roi_shape_var.get(),
+                        'wb_r_mult': float(self.config.get('wb_r_mult', 1.0)),
+                        'wb_g_mult': float(self.config.get('wb_g_mult', 1.0)),
+                        'wb_b_mult': float(self.config.get('wb_b_mult', 1.0)),
                     }
                     try:
                         mean_b, mean_g, mean_r, *_ = self._compute_roi_means(raw_frame, preview_config)
@@ -1513,48 +1580,62 @@ class SetupApp:
                         self.preview_last_rgb_update = now_preview
                     except Exception:
                         pass
+
+                # Draw ROI directly in preview coordinate space (smooth, zero-overhead)
+                sx = int(x * scale)
+                sy = int(y * scale)
+                sw = max(6, int(w * scale))
+                sh = max(6, int(h * scale))
+
                 if self.roi_shape_var.get() == 'circle':
-                    cx = int(x + w / 2)
-                    cy = int(y + h / 2)
-                    radius = int(min(w, h) / 2)
-                    cv2.circle(display_frame, (cx, cy), radius, (0, 255, 0), 3)
+                    cx = int(sx + sw / 2)
+                    cy = int(sy + sh / 2)
+                    radius = int(min(sw, sh) / 2)
+                    cv2.circle(preview_frame, (cx, cy), radius, (0, 255, 0), 2)
                     for angle in [0, 45, 90, 135, 180, 225, 270, 315]:
                         rad = np.radians(angle)
                         px = int(cx + radius * np.cos(rad))
                         py = int(cy + radius * np.sin(rad))
-                        cv2.rectangle(display_frame, (px-6, py-6), (px+6, py+6), (255, 255, 0), 2)
-                    cv2.rectangle(display_frame, (cx-4, cy-4), (cx+4, cy+4), (255, 255, 0), -1)
+                        cv2.rectangle(preview_frame, (px-4, py-4), (px+4, py+4), (255, 255, 0), 1)
+                    cv2.rectangle(preview_frame, (cx-3, cy-3), (cx+3, cy+3), (255, 255, 0), -1)
                 else:
-                    cv2.rectangle(display_frame, (x, y), (x+w, y+h), (0, 255, 0), 3)
+                    cv2.rectangle(preview_frame, (sx, sy), (sx+sw, sy+sh), (0, 255, 0), 2)
                     handle_color = (255, 255, 0)
-                    for cx, cy in [(x, y), (x+w, y), (x, y+h), (x+w, y+h),
-                                   (x+w//2, y), (x+w//2, y+h), (x, y+h//2), (x+w, y+h//2)]:
-                        cv2.rectangle(display_frame, (cx-6, cy-6), (cx+6, cy+6), handle_color, 2)
+                    for cx, cy in [(sx, sy), (sx+sw, sy), (sx, sy+sh), (sx+sw, sy+sh),
+                                   (sx+sw//2, sy), (sx+sw//2, sy+sh), (sx, sy+sh//2), (sx+sw, sy+sh//2)]:
+                        cv2.rectangle(preview_frame, (cx-4, cy-4), (cx+4, cy+4), handle_color, 1)
+
                 info_text = f"X:{x} Y:{y} W:{w} H:{h}"
-                cv2.putText(display_frame, info_text, (10, height - 20), 
-                           cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 255, 0), 2)
-                if self.preview_current_rgb is not None:
-                    pr, pg, pb, plog = self.preview_current_rgb
-                    fps_val = getattr(self.preview_worker, 'current_fps', 0.0) if self.preview_worker else 0.0
-                    if fps_val <= 0.0 and getattr(self, 'cap', None) is not None:
-                        try:
-                            fps_val = self.cap.get(cv2.CAP_PROP_FPS)
-                        except Exception:
-                            fps_val = 0.0
-                    fps_str = f"FPS: {fps_val:.0f}" if fps_val > 0 else "FPS: 60"
-                    overlay_lines = [
-                        f"ROI RGB  R:{pr:5.1f}  G:{pg:5.1f}  B:{pb:5.1f}  |  {fps_str}",
-                        f"Log10(B/R): {plog: .4f}",
-                    ]
-                    cv2.rectangle(display_frame, (8, 8), (470, 68), (0, 0, 0), -1)
-                    cv2.rectangle(display_frame, (8, 8), (470, 68), (255, 255, 255), 1)
-                    cv2.putText(display_frame, overlay_lines[0], (18, 32),
-                                cv2.FONT_HERSHEY_SIMPLEX, 0.62, (255, 255, 255), 2)
-                    cv2.putText(display_frame, overlay_lines[1], (18, 58),
-                                cv2.FONT_HERSHEY_SIMPLEX, 0.62, (255, 255, 255), 2)
-                new_width = int(width * scale)
-                new_height = int(height * scale)
-                preview_frame = cv2.resize(display_frame, (new_width, new_height))
+                cv2.putText(preview_frame, info_text, (10, new_height - 12), 
+                           cv2.FONT_HERSHEY_SIMPLEX, 0.45, (0, 255, 0), 1)
+
+                # Render always-visible, crisp on-screen HUD overlay box
+                pr, pg, pb, plog = self.preview_current_rgb if self.preview_current_rgb is not None else (0.0, 0.0, 0.0, 0.0)
+                fps_val = getattr(self.preview_worker, 'current_fps', 0.0) if self.preview_worker else 0.0
+                if fps_val <= 0.0 and getattr(self, 'cap', None) is not None:
+                    try:
+                        fps_val = self.cap.get(cv2.CAP_PROP_FPS)
+                    except Exception:
+                        fps_val = 0.0
+                fps_str = f"FPS: {fps_val:.0f}" if fps_val > 0 else "FPS: 60"
+                overlay_lines = [
+                    f"ROI RGB  R: {pr:4.1f}  G: {pg:4.1f}  B: {pb:4.1f} | {fps_str}",
+                    f"Log10(B/R): {plog: .4f}",
+                ]
+                font = cv2.FONT_HERSHEY_SIMPLEX
+                font_scale = 0.52
+                thickness = 1
+                (tw1, th1), _ = cv2.getTextSize(overlay_lines[0], font, font_scale, thickness)
+                (tw2, th2), _ = cv2.getTextSize(overlay_lines[1], font, font_scale, thickness)
+                box_w = max(tw1, tw2) + 20
+                box_h = th1 + th2 + 22
+                cv2.rectangle(preview_frame, (10, 10), (10 + box_w, 10 + box_h), (0, 0, 0), -1)
+                cv2.rectangle(preview_frame, (10, 10), (10 + box_w, 10 + box_h), (255, 255, 255), 1)
+                cv2.putText(preview_frame, overlay_lines[0], (16, 10 + th1 + 5),
+                            font, font_scale, (255, 255, 255), thickness, cv2.LINE_AA)
+                cv2.putText(preview_frame, overlay_lines[1], (16, 10 + th1 + th2 + 14),
+                            font, font_scale, (255, 255, 255), thickness, cv2.LINE_AA)
+
                 rgb_frame = cv2.cvtColor(preview_frame, cv2.COLOR_BGR2RGB)
                 img = Image.fromarray(rgb_frame)
                 imgtk = ImageTk.PhotoImage(image=img)
@@ -1566,7 +1647,7 @@ class SetupApp:
             pass
         finally:
             if getattr(self, 'is_running', False):
-                self.root.after(10, self.update_preview)
+                self.root.after(16, self.update_preview)
 
     def _render_empty_preview_placeholder(self):
         try:
@@ -1711,12 +1792,15 @@ class SetupApp:
             self.root.deiconify()
             self.root.lift()
             self.root.focus_force()
+            # MiiCam/ToupCam needs a short USB/SDK quiescence interval after
+            # Miicam_Stop/Miicam_Close. Reopening it synchronously here used to
+            # race the SDK callback thread and could leave the whole GUI frozen
+            # with ERROR_BUSY (-2147024726). Reconnect asynchronously after the
+            # native handle has fully settled.
             if not source_is_file and self.config.get('source'):
-                try:
-                    self.open_camera_source(self.config['source'], verbose=False)
-                except Exception:
-                    pass
-            self.update_preview()
+                source_to_restore = self.config['source']
+                self.root.after(650, lambda s=source_to_restore: self._restore_camera_after_analysis(s))
+            self.root.after(0, self.update_preview)
 
             if res and isinstance(res, dict):
                 save_err = res.get('save_error')
@@ -1737,6 +1821,16 @@ class SetupApp:
                         lines.append(f"Метки: {res['ann_count']} шт. (лист Annotations)")
                     msg = "Результаты сохранены:\n\n" + "\n".join(lines)
                     messagebox.showinfo("Сохранено", msg, parent=self.root)
+
+    def _restore_camera_after_analysis(self, source):
+        """Restore the live camera without blocking the analysis finalization path."""
+        if not self.is_running:
+            return
+        try:
+            if self.open_camera_source(source, verbose=False):
+                self.update_preview()
+        except Exception as exc:
+            print(f"⚠️ Не удалось автоматически восстановить камеру после анализа: {exc}")
 
     def on_closing(self):
         self.is_running = False

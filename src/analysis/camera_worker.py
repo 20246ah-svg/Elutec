@@ -568,9 +568,24 @@ class CameraWorker:
                 time.sleep(0.001)
                 continue
 
-            mean_b, mean_g, mean_r, safe_x, safe_y, safe_w, safe_h, h_f, w_f = compute_roi_means(
-                frame, self.config
-            )
+            # During ROI dragging the live camera must keep delivering fresh frames.
+            # Defer ROI statistics until the drag is released so the preview never freezes.
+            roi_dragging = bool(self.config.get('_roi_dragging', False))
+            if roi_dragging and not self.source_is_file:
+                h_f, w_f = frame.shape[:2]
+                x = int(self.config.get('roi_x', 0))
+                y = int(self.config.get('roi_y', 0))
+                w = int(self.config.get('roi_w', 20))
+                h = int(self.config.get('roi_h', 20))
+                safe_x = max(0, min(x, w_f - 1))
+                safe_y = max(0, min(y, h_f - 1))
+                safe_w = max(10, min(w, w_f - safe_x))
+                safe_h = max(10, min(h, h_f - safe_y))
+                mean_b, mean_g, mean_r = self.current_means
+            else:
+                mean_b, mean_g, mean_r, safe_x, safe_y, safe_w, safe_h, h_f, w_f = compute_roi_means(
+                    frame, self.config
+                )
             if self.source_is_file and self._file_fps > 0:
                 elapsed_ms = (self._file_frame_index / self._file_fps) * 1000.0
             else:
@@ -585,6 +600,12 @@ class CameraWorker:
                 self.current_means = (mean_b, mean_g, mean_r)
                 self.roi_info = (safe_x, safe_y, safe_w, safe_h, h_f, w_f)
                 self.frame_count += 1
+
+            if roi_dragging and not self.source_is_file:
+                # Camera acquisition/display continues; do not commit analytical points
+                # until the ROI becomes stable again.
+                time.sleep(0.001)
+                continue
 
             if not self.is_analysis_started:
                 # В режиме настройки ROI (предпросмотр) только вычисляем средние для экрана,

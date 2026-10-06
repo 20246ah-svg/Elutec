@@ -100,17 +100,20 @@ DEFAULT_CONFIG = {
 
     # Настройки RGB-детектора (MiiCam / ToupCam)
     "miicam_auto_exposure": False,
-    "miicam_exposure_us": 20000,
+    "miicam_exposure_us": 22000,
     "miicam_gain": 100,
     "miicam_wb_r": 0,
     "miicam_wb_g": 0,
     "miicam_wb_b": 0,
+    "wb_r_mult": 1.0,
+    "wb_g_mult": 1.0,
+    "wb_b_mult": 1.0,
     "miicam_temp": 6500,
     "miicam_tint": 1000,
     "miicam_gamma": 100,
-    "miicam_contrast": 0,
+    "miicam_contrast": 5,
     "miicam_brightness": 0,
-    "miicam_saturation": 128,
+    "miicam_saturation": 135,
     "miicam_hue": 0,
     "miicam_speed": 2,
     "miicam_binning": 1,
@@ -700,8 +703,9 @@ class SettingsWindow:
 
     def _build_detector_tab(self, tab_detector, light):
         self.detector_vars = {}
+        self._detector_apply_after_id = None
 
-        # 0. Presets & Profiles Management Bar (Именованные профили: Бром, Ароматика, etc.)
+        # 0. Presets & Profiles Management Bar
         lf_presets = ttk.LabelFrame(tab_detector, text=" 💼 Именованные профили и пресеты настроек сенсора ", padding=8)
         lf_presets.pack(fill="x", pady=(0, 6))
 
@@ -710,8 +714,26 @@ class SettingsWindow:
 
         ttk.Label(p_row, text="Пресет сенсора:", font=("Segoe UI", 9, "bold")).pack(side="left", padx=(0, 6))
 
+        # Очистка устаревших встроенных пресетов: оставляем только "По умолчанию (Default)" и созданные пользователем
+        obsolete_presets = {
+            "Хроматографический спектр (ChromatoBoost)",
+            "Стандартный sRGB (sRGB Standard D65)",
+            "Бром (Bromine)",
+            "Ароматика (Aromatics)",
+            "Насыщенные углеводороды (Saturates)",
+            "Турбо 120 FPS (Низкая выдержка)",
+            "Бром",
+            "Ароматика",
+            "Насыщенные углеводороды",
+            "Турбо 120 FPS",
+        }
         if "detector_presets" not in self.config or not isinstance(self.config.get("detector_presets"), dict):
             self.config["detector_presets"] = dict(DEFAULT_DETECTOR_PRESETS)
+        else:
+            for obs in obsolete_presets:
+                self.config["detector_presets"].pop(obs, None)
+            if "По умолчанию (Default)" not in self.config["detector_presets"]:
+                self.config["detector_presets"]["По умолчанию (Default)"] = dict(DEFAULT_DETECTOR_PRESETS["По умолчанию (Default)"])
 
         preset_names = list(self.config["detector_presets"].keys())
         self.preset_var = tk.StringVar(value=preset_names[0] if preset_names else "По умолчанию (Default)")
@@ -723,21 +745,6 @@ class SettingsWindow:
         ttk.Button(p_row, text="⚡ Применить", command=self._apply_detector_preset).pack(side="left", padx=2)
         ttk.Button(p_row, text="💾 Сохранить как...", command=self._save_detector_preset).pack(side="left", padx=2)
         ttk.Button(p_row, text="🗑️ Удалить", command=self._delete_detector_preset).pack(side="left", padx=2)
-
-        # 1. Device status
-        lf_det_status = ttk.LabelFrame(tab_detector, text=" Состояние RGB-детектора ", padding=8)
-        lf_det_status.pack(fill="x", pady=(0, 8))
-
-        status_row = ttk.Frame(lf_det_status)
-        status_row.pack(fill="x", pady=2)
-
-        self.lbl_detector_status = ttk.Label(
-            status_row,
-            text="✅ Сенсор MiiCam подключен (прямое аппаратное управление без задержек)",
-            font=("Segoe UI", 9, "bold"),
-            foreground="#10B981" if not light else "#059669"
-        )
-        self.lbl_detector_status.pack(side="left")
 
         # 2. Sub-Notebook for MiiCam (Color, Expo, WB, Control, Flip)
         nb_det = ttk.Notebook(tab_detector)
@@ -804,22 +811,28 @@ class SettingsWindow:
         _add_slider_row(tab_sub_color, "Оттенок (Hue):", self.detector_vars["miicam_hue"], -180, 180, 0)
         _add_slider_row(tab_sub_color, "Насыщенность (Saturation):", self.detector_vars["miicam_saturation"], 0, 255, 128)
 
-        btn_c_def = ttk.Frame(tab_sub_color)
-        btn_c_def.pack(fill="x", pady=(10, 0))
-        ttk.Button(btn_c_def, text="🔄 Сброс цвета по умолчанию (Default)", command=self._reset_color_defaults).pack(side="left")
+        row_color_actions = ttk.Frame(tab_sub_color)
+        row_color_actions.pack(fill="x", pady=(8, 2))
+        ttk.Button(row_color_actions, text="↺ Нейтральный цвет", command=lambda: self._set_color_profile(128, 0, 0, 100)).pack(side="left", padx=(0, 6))
+        ttk.Button(row_color_actions, text="⚡ Применить сейчас", command=self._apply_to_sensor_now).pack(side="left", padx=6)
 
         # --- SUB-TAB: EXPO ---
         self.detector_vars["miicam_auto_exposure"] = tk.BooleanVar(value=bool(self.config.get("miicam_auto_exposure", False)))
         self.detector_vars["miicam_exposure_us"] = tk.IntVar(value=int(self.config.get("miicam_exposure_us", 20000)))
         self.detector_vars["miicam_gain"] = tk.IntVar(value=int(self.config.get("miicam_gain", 100)))
 
+        # One-Touch Auto Exposure button (recommended for stable SARA analysis)
+        row_auto_e = ttk.Frame(tab_sub_expo)
+        row_auto_e.pack(fill="x", pady=(0, 6))
+        ttk.Button(row_auto_e, text="⚡ Автонастройка и фиксация яркости (Рекомендуется)", command=self._trigger_auto_calibrate_exposure).pack(side="left")
+
         cb_ae = ttk.Checkbutton(
             tab_sub_expo,
-            text=" Автоматическая экспозиция (Auto Exposure)",
+            text=" Непрерывная автоэкспозиция (Continuous Auto Exposure)",
             variable=self.detector_vars["miicam_auto_exposure"],
             command=self._on_detector_param_changed
         )
-        cb_ae.pack(anchor="w", pady=(0, 6))
+        cb_ae.pack(anchor="w", pady=(2, 6))
 
         row_e = ttk.Frame(tab_sub_expo)
         row_e.pack(fill="x", pady=4)
@@ -868,8 +881,8 @@ class SettingsWindow:
 
         # --- SUB-TAB: WB ---
         row_wb_btn = ttk.Frame(tab_sub_wb)
-        row_wb_btn.pack(fill="x", pady=(0, 6))
-        ttk.Button(row_wb_btn, text="⚖️ Автокалибровка баланса белого (One-Push AWB)", command=self._trigger_detector_awb).pack(side="left")
+        row_wb_btn.pack(fill="x", pady=(0, 8))
+        ttk.Button(row_wb_btn, text="⚖️ Баланс белого (AWB)", command=self._trigger_detector_awb).pack(side="left", padx=(0, 8))
 
         self.detector_vars["miicam_temp"] = tk.IntVar(value=int(self.config.get("miicam_temp", 6500)))
         self.detector_vars["miicam_tint"] = tk.IntVar(value=int(self.config.get("miicam_tint", 1000)))
@@ -934,11 +947,6 @@ class SettingsWindow:
                 self._on_detector_param_changed()
         cb_af.bind("<<ComboboxSelected>>", _on_af_cb)
 
-        row_opt = ttk.Frame(tab_sub_ctrl)
-        row_opt.pack(fill="x", pady=4)
-        ttk.Checkbutton(row_opt, text=" Буферизация кадров DMA (Frame Preload)", variable=self.detector_vars["miicam_frame_preload"], command=self._on_detector_param_changed).pack(side="left", padx=(0, 16))
-        ttk.Checkbutton(row_opt, text=" Приоритет реального времени (Real-Time Priority)", variable=self.detector_vars["miicam_thread_priority"], command=self._on_detector_param_changed).pack(side="left")
-
         # --- SUB-TAB: FLIP ---
         self.detector_vars["miicam_h_flip"] = tk.BooleanVar(value=bool(self.config.get("miicam_h_flip", False)))
         self.detector_vars["miicam_v_flip"] = tk.BooleanVar(value=bool(self.config.get("miicam_v_flip", False)))
@@ -965,7 +973,6 @@ class SettingsWindow:
 
         ttk.Button(comp_top, text="⚡ Применить настройки", command=self._apply_to_sensor_now).pack(side="right", padx=(6, 0))
         ttk.Button(comp_top, text="📸 Зафиксировать исходный кадр", command=self._capture_new_baseline).pack(side="right", padx=(6, 0))
-        ttk.Button(comp_top, text="⚡ Турбо FPS (60-120)", command=lambda: self._apply_high_fps_preset(90)).pack(side="right", padx=(6, 0))
         ttk.Button(comp_top, text="🔄 Сброс настроек", command=self._reset_detector_defaults).pack(side="right")
 
         comp_slider_row = ttk.Frame(lf_comp)
@@ -1002,51 +1009,6 @@ class SettingsWindow:
         # Start single preview update loop
         self._schedule_comparison_tick(50)
 
-        # =========================================================================
-        # 6. TAB: ПРОИЗВОДИТЕЛЬНОСТЬ
-        # =========================================================================
-        lf_prof = ttk.LabelFrame(tab_perf, text=" Готовые пресеты нагрузки ", padding=10)
-        lf_prof.pack(fill="x", pady=(0, 10))
-
-        row_p = ttk.Frame(lf_prof)
-        row_p.pack(fill="x", pady=4)
-        ttk.Label(row_p, text="Профиль производительности:").pack(side="left", padx=(0, 8))
-        self.profile_var = tk.StringVar()
-        self.profile_combo = ttk.Combobox(
-            row_p, textvariable=self.profile_var,
-            values=list(PERFORMANCE_PROFILES.keys()),
-            state="readonly", width=22
-        )
-        self.profile_combo.pack(side="left")
-        self.profile_combo.bind("<<ComboboxSelected>>", self._profile_selected)
-
-        lf_fine = ttk.LabelFrame(tab_perf, text=" Тонкие интервалы и буферы памяти ", padding=10)
-        lf_fine.pack(fill="x", pady=(0, 10))
-
-        self.perf_vars = {}
-        fields = [
-            ("analysis_interval_ms", "Интервал обработки кадра, мс", 1, 1000),
-            ("graph_update_ms", "Частота обновления графиков, мс", 20, 5000),
-            ("max_points", "Максимум точек истории графиков", 1000, 500000),
-            ("preview_interval_ms", "Обновление превью камеры, мс", 20, 1000),
-            ("preview_rgb_interval_ms", "Расчёт RGB превью, мс", 50, 3000),
-        ]
-        f_grid = ttk.Frame(lf_fine)
-        f_grid.pack(fill="x")
-        for row, (key, label, lo, hi) in enumerate(fields):
-            ttk.Label(f_grid, text=label).grid(row=row, column=0, sticky="w", pady=4)
-            var = tk.IntVar(value=100)
-            self.perf_vars[key] = var
-            ttk.Spinbox(f_grid, from_=lo, to=hi, textvariable=var, width=12).grid(row=row, column=1, sticky="w", padx=12, pady=4)
-
-        # Bottom buttons
-        btn_bar = ttk.Frame(outer)
-        btn_bar.pack(fill="x", pady=(10, 0))
-
-        ttk.Button(btn_bar, text="↩ Сбросить по умолчанию", command=self._reset).pack(side="left")
-        ttk.Button(btn_bar, text="Отмена", command=self.win.destroy).pack(side="right", padx=(6, 0))
-        ttk.Button(btn_bar, text="💾 Сохранить и применить", command=self._apply).pack(side="right")
-
     def _bind_unit_switch(self, var_val1, var_val2, unit_var, combo):
         def _on_unit_change(event=None):
             new_u = unit_var.get()
@@ -1079,17 +1041,71 @@ class SettingsWindow:
         if self.current_cap and hasattr(self.current_cap, 'trigger_awb_once'):
             ok = self.current_cap.trigger_awb_once()
             if ok:
-                messagebox.showinfo("Баланс белого", "Автокалибровка баланса белого (AWB) успешно отправлена на сенсор!", parent=self.win)
+                if hasattr(self.current_cap, 'wb_temp') and 'miicam_temp' in getattr(self, 'detector_vars', {}):
+                    self.detector_vars['miicam_temp'].set(self.current_cap.wb_temp)
+                    s = getattr(self.detector_vars['miicam_temp'], 'scale_widget', None)
+                    if s:
+                        try: s.set(self.current_cap.wb_temp)
+                        except Exception: pass
+                if hasattr(self.current_cap, 'wb_tint') and 'miicam_tint' in getattr(self, 'detector_vars', {}):
+                    self.detector_vars['miicam_tint'].set(self.current_cap.wb_tint)
+                    s = getattr(self.detector_vars['miicam_tint'], 'scale_widget', None)
+                    if s:
+                        try: s.set(self.current_cap.wb_tint)
+                        except Exception: pass
+                for k, attr in [('miicam_wb_r', 'wb_r'), ('miicam_wb_g', 'wb_g'), ('miicam_wb_b', 'wb_b')]:
+                    if hasattr(self.current_cap, attr) and k in getattr(self, 'detector_vars', {}):
+                        val = getattr(self.current_cap, attr)
+                        self.detector_vars[k].set(val)
+                        s = getattr(self.detector_vars[k], 'scale_widget', None)
+                        if s:
+                            try: s.set(val)
+                            except Exception: pass
+                self._cached_adj_scaled = None
+                self._cached_params_key = None
+                messagebox.showinfo("Баланс белого", "Аппаратный баланс белого (AWB) успешно выполнен на сенсоре детектора!", parent=self.win)
             else:
                 messagebox.showwarning("Баланс белого", "Не удалось выполнить команду AWB на сенсоре.", parent=self.win)
         else:
-            messagebox.showinfo("Баланс белого", "Команда калибровки будет применена при активном подключении RGB-детектора.", parent=self.win)
+            messagebox.showinfo("Баланс белого", "Команда калибровки AWB будет применена при активном подключении RGB-детектора.", parent=self.win)
+
+    def _trigger_auto_calibrate_exposure(self):
+        if self.current_cap and hasattr(self.current_cap, 'auto_calibrate_exposure_once'):
+            ok = self.current_cap.auto_calibrate_exposure_once()
+            if ok:
+                if hasattr(self.current_cap, 'exposure_us') and 'miicam_exposure_us' in getattr(self, 'detector_vars', {}):
+                    self.detector_vars['miicam_exposure_us'].set(self.current_cap.exposure_us)
+                    if hasattr(self, 's_exp'):
+                        try: self.s_exp.set(self.current_cap.exposure_us)
+                        except Exception: pass
+                    if hasattr(self, 'lbl_exp_ms'):
+                        self.lbl_exp_ms.config(text=f"{self.current_cap.exposure_us / 1000.0:.1f} мс")
+                if hasattr(self.current_cap, 'gain_percent') and 'miicam_gain' in getattr(self, 'detector_vars', {}):
+                    self.detector_vars['miicam_gain'].set(self.current_cap.gain_percent)
+                    s = getattr(self.detector_vars['miicam_gain'], 'scale_widget', None)
+                    if s:
+                        try: s.set(self.current_cap.gain_percent)
+                        except Exception: pass
+                if 'miicam_auto_exposure' in getattr(self, 'detector_vars', {}):
+                    self.detector_vars['miicam_auto_exposure'].set(False)
+                self._on_detector_param_changed()
+                messagebox.showinfo(
+                    "Автонастройка экспозиции",
+                    f"Яркость успешно подобрана и зафиксирована!\n"
+                    f"Выдержка: {self.current_cap.exposure_us / 1000.0:.1f} мс (30+ FPS), Усиление: {self.current_cap.gain_percent}%\n"
+                    f"Мерцание и просадка FPS полностью устранены.",
+                    parent=self.win
+                )
+            else:
+                messagebox.showwarning("Автонастройка экспозиции", "Не удалось выполнить автонастройку на сенсоре.", parent=self.win)
+        else:
+            messagebox.showinfo("Автонастройка экспозиции", "Команда калибровки будет применена при активном подключении RGB-детектора.", parent=self.win)
 
     def _apply_to_sensor_now(self):
         cfg = {k: v.get() for k, v in getattr(self, 'detector_vars', {}).items()}
         if self.current_cap and hasattr(self.current_cap, 'apply_settings_dict'):
             try:
-                self.current_cap.apply_settings_dict(cfg)
+                self._on_detector_param_changed(immediate=True)
                 messagebox.showinfo("Настройки камеры", "Текущие настройки успешно применены к камере!", parent=self.win)
             except Exception as e:
                 messagebox.showwarning("Настройки камеры", f"Не удалось применить настройки: {e}", parent=self.win)
@@ -1193,6 +1209,13 @@ class SettingsWindow:
         presets = self.config.get("detector_presets", {})
         if not name or name not in presets:
             return
+        if name in ("По умолчанию (Default)", "По умолчанию", "Default"):
+            messagebox.showwarning(
+                "Защита пресета",
+                "Пресет «По умолчанию (Default)» защищен от удаления и является базовым эталоном.",
+                parent=self.win
+            )
+            return
         if messagebox.askyesno("Удаление пресета", f"Вы уверены, что хотите удалить пресет «{name}»?", parent=self.win):
             del self.config["detector_presets"][name]
             preset_names = list(self.config["detector_presets"].keys())
@@ -1204,28 +1227,6 @@ class SettingsWindow:
             if hasattr(self, 'preset_var'):
                 self.preset_var.set(preset_names[0])
             messagebox.showinfo("Пресеты", f"Пресет «{name}» удален.", parent=self.win)
-        else:
-            self.detector_vars["miicam_exposure_us"].set(33000)
-            self.detector_vars["miicam_gain"].set(100)
-            self.detector_vars["miicam_speed"].set(2)
-            self.detector_vars["miicam_binning"].set(1)
-
-        for k in ["miicam_gain"]:
-            s = getattr(self.detector_vars.get(k), "scale_widget", None)
-            if s is not None:
-                try:
-                    s.set(self.detector_vars[k].get())
-                except Exception:
-                    pass
-
-        if hasattr(self, 's_exp'):
-            try:
-                self.s_exp.set(self.detector_vars["miicam_exposure_us"].get())
-            except Exception:
-                pass
-        if hasattr(self, 'lbl_exp_ms'):
-            self.lbl_exp_ms.config(text=f"{self.detector_vars['miicam_exposure_us'].get() / 1000.0:.1f} мс")
-        self._on_detector_param_changed()
 
     def _capture_new_baseline(self):
         """Зафиксировать чистый эталонный кадр (Raw Baseline) для левой половины сравнения."""
@@ -1335,13 +1336,13 @@ class SettingsWindow:
                     table = np.array([((i / 255.0) ** inv_gamma) * 255 for i in range(256)]).astype("uint8")
                     adj = cv2.LUT(adj, table)
 
-                # D. Color Temperature (Temp K) & Tint
+                # D. Color Temperature (Temp K) & Tint (Subtle natural Planckian shift)
                 if temp != 6500 or tint != 1000:
-                    t_factor = (temp - 6500.0) / 8500.0
-                    tint_factor = (tint - 1000.0) / 1500.0
-                    r_mult = max(0.0, 1.0 + 0.45 * t_factor + 0.35 * tint_factor)
-                    g_mult = max(0.0, 1.0 - 0.35 * tint_factor)
-                    b_mult = max(0.0, 1.0 - 0.45 * t_factor + 0.35 * tint_factor)
+                    t_factor = (temp - 6500.0) / 15000.0
+                    tint_factor = (tint - 1000.0) / 3000.0
+                    r_mult = max(0.1, 1.0 + 0.2 * t_factor + 0.15 * tint_factor)
+                    g_mult = max(0.1, 1.0 - 0.15 * tint_factor)
+                    b_mult = max(0.1, 1.0 - 0.2 * t_factor + 0.15 * tint_factor)
                     adj_f = adj.astype(np.float32)
                     adj_f[:, :, 0] = np.clip(adj_f[:, :, 0] * b_mult, 0, 255)
                     adj_f[:, :, 1] = np.clip(adj_f[:, :, 1] * g_mult, 0, 255)
@@ -1419,20 +1420,48 @@ class SettingsWindow:
         finally:
             self._schedule_comparison_tick(40)
 
-    def _on_detector_param_changed(self, event=None):
+    def _on_detector_param_changed(self, event=None, immediate=False):
         self._cached_adj_scaled = None
         self._cached_params_key = None
-        # Sandbox preview updates without modifying live hardware registers on slider move
+        cfg = {k: v.get() for k, v in getattr(self, 'detector_vars', {}).items()}
+        if hasattr(self, 'config') and isinstance(self.config, dict):
+            try:
+                self.config.update(cfg)
+            except Exception:
+                pass
 
-    def _reset_color_defaults(self):
-        color_defs = {
-            "miicam_brightness": 0,
-            "miicam_contrast": 0,
-            "miicam_gamma": 100,
+        def _push():
+            self._detector_apply_after_id = None
+            if self.current_cap and hasattr(self.current_cap, 'is_miicam') and self.current_cap.is_miicam and hasattr(self.current_cap, 'apply_settings_dict'):
+                try:
+                    latest = {k: v.get() for k, v in getattr(self, 'detector_vars', {}).items()}
+                    self.current_cap.apply_settings_dict(latest)
+                except Exception:
+                    pass
+
+        if immediate:
+            if getattr(self, '_detector_apply_after_id', None) is not None:
+                try: self.win.after_cancel(self._detector_apply_after_id)
+                except Exception: pass
+                self._detector_apply_after_id = None
+            _push()
+            return
+        try:
+            if getattr(self, '_detector_apply_after_id', None) is not None:
+                self.win.after_cancel(self._detector_apply_after_id)
+            self._detector_apply_after_id = self.win.after(80, _push)
+        except Exception:
+            _push()
+
+    def _set_color_profile(self, sat, contrast, brightness, gamma):
+        profile = {
+            "miicam_saturation": sat,
+            "miicam_contrast": contrast,
+            "miicam_brightness": brightness,
+            "miicam_gamma": gamma,
             "miicam_hue": 0,
-            "miicam_saturation": 128,
         }
-        for k, v in color_defs.items():
+        for k, v in profile.items():
             if k in getattr(self, 'detector_vars', {}):
                 self.detector_vars[k].set(v)
                 s = getattr(self.detector_vars[k], 'scale_widget', None)
@@ -1443,29 +1472,11 @@ class SettingsWindow:
                         pass
         self._on_detector_param_changed()
 
+    def _reset_color_defaults(self):
+        self._set_color_profile(sat=165, contrast=15, brightness=0, gamma=100)
+
     def _reset_detector_defaults(self):
-        defaults = {
-            "miicam_auto_exposure": False,
-            "miicam_exposure_us": 20000,
-            "miicam_gain": 100,
-            "miicam_temp": 6500,
-            "miicam_tint": 1000,
-            "miicam_wb_r": 0,
-            "miicam_wb_g": 0,
-            "miicam_wb_b": 0,
-            "miicam_gamma": 100,
-            "miicam_contrast": 0,
-            "miicam_brightness": 0,
-            "miicam_saturation": 128,
-            "miicam_hue": 0,
-            "miicam_speed": 2,
-            "miicam_binning": 1,
-            "miicam_frame_preload": True,
-            "miicam_thread_priority": 2,
-            "miicam_h_flip": False,
-            "miicam_v_flip": False,
-            "miicam_anti_flicker": 1,
-        }
+        defaults = dict(DEFAULT_DETECTOR_PRESETS.get("По умолчанию (Default)", {}))
         for k, v in defaults.items():
             if k in getattr(self, 'detector_vars', {}):
                 self.detector_vars[k].set(v)
@@ -1475,13 +1486,15 @@ class SettingsWindow:
                         s.set(v)
                     except Exception:
                         pass
+        self._on_detector_param_changed()
+        exp_val = defaults.get("miicam_exposure_us", 22000)
         if hasattr(self, 's_exp'):
             try:
-                self.s_exp.set(20000)
+                self.s_exp.set(exp_val)
             except Exception:
                 pass
         if hasattr(self, 'lbl_exp_ms'):
-            self.lbl_exp_ms.config(text="20.0 мс")
+            self.lbl_exp_ms.config(text=f"{exp_val / 1000.0:.1f} мс")
         if hasattr(self, 'compare_mode_var'):
             self.compare_mode_var.set("split")
         if hasattr(self, 'compare_split_pos_var'):
@@ -1539,6 +1552,41 @@ class SettingsWindow:
                         s.set(int(merged[k]))
                     except Exception:
                         pass
+
+        # If camera is connected, sync active hardware parameters to UI sliders
+        if getattr(self, 'is_miicam', False) and self.current_cap is not None:
+            try:
+                cap = self.current_cap
+                hw_sync = {
+                    "miicam_exposure_us": getattr(cap, 'exposure_us', None),
+                    "miicam_gain": getattr(cap, 'gain_percent', None),
+                    "miicam_brightness": getattr(cap, 'brightness', None),
+                    "miicam_contrast": getattr(cap, 'contrast', None),
+                    "miicam_gamma": getattr(cap, 'gamma', None),
+                    "miicam_hue": getattr(cap, 'hue', None),
+                    "miicam_saturation": getattr(cap, 'saturation', None),
+                    "miicam_temp": getattr(cap, 'wb_temp', None),
+                    "miicam_tint": getattr(cap, 'wb_tint', None),
+                    "miicam_wb_r": getattr(cap, 'wb_r', None),
+                    "miicam_wb_g": getattr(cap, 'wb_g', None),
+                    "miicam_wb_b": getattr(cap, 'wb_b', None),
+                    "miicam_speed": getattr(cap, 'speed', None),
+                    "miicam_binning": getattr(cap, 'binning_mode', None),
+                    "miicam_h_flip": getattr(cap, 'h_flip', None),
+                    "miicam_v_flip": getattr(cap, 'v_flip', None),
+                }
+                for k, v in hw_sync.items():
+                    if v is not None and k in getattr(self, "detector_vars", {}):
+                        self.detector_vars[k].set(v)
+                        s = getattr(self.detector_vars[k], 'scale_widget', None)
+                        if s is not None:
+                            try:
+                                s.set(int(v) if isinstance(v, (int, float)) else v)
+                            except Exception:
+                                pass
+            except Exception:
+                pass
+
         if hasattr(self, 'compare_mode_var'):
             self.compare_mode_var.set(str(merged.get("detector_compare_mode", "split")))
         if hasattr(self, 'compare_split_pos_var'):
@@ -1549,12 +1597,12 @@ class SettingsWindow:
             except Exception:
                 pass
         if hasattr(self, 'speed_combo_var'):
-            sp_idx = int(merged.get("miicam_speed", 2))
+            sp_idx = int(getattr(self.current_cap, 'speed', merged.get("miicam_speed", 2)))
             vals = ["0: Низкая (Low)", "1: Нормальная (Normal)", "2: Максимальная (High / 60-120 FPS)"]
             if 0 <= sp_idx < len(vals):
                 self.speed_combo_var.set(vals[sp_idx])
         if hasattr(self, 'binning_combo_var'):
-            bin_idx = int(merged.get("miicam_binning", 1))
+            bin_idx = int(getattr(self.current_cap, 'binning_mode', merged.get("miicam_binning", 1)))
             self.binning_combo_var.set("2: Биннинг 2x2 (Турбо FPS / Высокая чувств.)" if bin_idx == 2 else "1: Полное разрешение 1x1")
         if hasattr(self, 's_exp') and 'miicam_exposure_us' in getattr(self, 'detector_vars', {}):
             try:
@@ -2215,7 +2263,7 @@ class SettingsWindow:
             messagebox.showwarning("Настройки", f"Не удалось сохранить настройки:\n{e}", parent=self.win)
 
         # Apply settings to active MiiCam camera on Save & Apply
-        if self.current_cap and hasattr(self.current_cap, 'apply_settings_dict'):
+        if self.current_cap and hasattr(self.current_cap, 'is_miicam') and self.current_cap.is_miicam and hasattr(self.current_cap, 'apply_settings_dict'):
             try:
                 self.current_cap.apply_settings_dict(values)
             except Exception as e:

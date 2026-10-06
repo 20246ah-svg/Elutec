@@ -5,6 +5,7 @@ import cv2
 import os
 import traceback
 from typing import Optional
+from PIL import Image, ImageDraw, ImageFont
 
 from ..gui.live_graph import LiveGraphWindow
 from ..analysis.camera_worker import CameraWorker
@@ -19,6 +20,168 @@ from ..utils.helpers import (
 )
 from ..utils.ffmpeg_utils import find_ffmpeg_exe
 from ..config import FFMPEG_PIPE_OUTPUT_FPS, MAX_POINTS, DEFAULT_PLAYER_HUD_METRICS
+
+
+_UNICODE_FONT_CACHE = {}
+
+def _get_unicode_font(size=12, bold=False):
+    key = (size, bold)
+    if key in _UNICODE_FONT_CACHE:
+        return _UNICODE_FONT_CACHE[key]
+    candidates = [
+        "arialbd.ttf" if bold else "arial.ttf",
+        "segoeuib.ttf" if bold else "segoeui.ttf",
+        "tahomabd.ttf" if bold else "tahoma.ttf",
+        "DejaVuSans-Bold.ttf" if bold else "DejaVuSans.ttf",
+        "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf" if bold else "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf",
+        "/usr/share/fonts/truetype/liberation/LiberationSans-Bold.ttf" if bold else "/usr/share/fonts/truetype/liberation/LiberationSans-Regular.ttf",
+        "C:\\Windows\\Fonts\\arialbd.ttf" if bold else "C:\\Windows\\Fonts\\arial.ttf",
+        "C:\\Windows\\Fonts\\segoeuib.ttf" if bold else "C:\\Windows\\Fonts\\segoeui.ttf",
+        "C:\\Windows\\Fonts\\tahomabd.ttf" if bold else "C:\\Windows\\Fonts\\tahoma.ttf"
+    ]
+    for c in candidates:
+        try:
+            f = ImageFont.truetype(c, size)
+            _UNICODE_FONT_CACHE[key] = f
+            return f
+        except Exception:
+            continue
+    try:
+        f = ImageFont.load_default()
+        _UNICODE_FONT_CACHE[key] = f
+        return f
+    except Exception:
+        return None
+
+
+def _render_sidebar_hud_pil(shown, hud_x, hud_y, hud_w, hud_h, time_str, items_data):
+    """
+    Высококачественный рендеринг боковой информационной HUD-панели видеоплеера с поддержкой
+    кириллицы (Unicode) и авто-выравниванием значений без перекрытий.
+    """
+    sub = shown[hud_y:hud_y+hud_h, hud_x:hud_x+hud_w]
+    if sub.size == 0 or sub.shape[0] != hud_h or sub.shape[1] != hud_w:
+        return
+
+    hud_overlay = sub.copy()
+    cv2.rectangle(hud_overlay, (0, 0), (hud_w, hud_h), (14, 18, 26), -1)
+    cv2.addWeighted(hud_overlay, 0.88, sub, 0.12, 0, sub)
+    cv2.rectangle(sub, (0, 0), (hud_w - 1, hud_h - 1), (48, 62, 80), 1)
+
+    # Кнопка [+ SELECT]
+    btn_w, btn_h = 70, 20
+    bx1 = hud_w - btn_w - 6
+    by1 = 5
+    cv2.rectangle(sub, (bx1, by1), (bx1 + btn_w, by1 + btn_h), (25, 36, 52), -1)
+    cv2.rectangle(sub, (bx1, by1), (bx1 + btn_w, by1 + btn_h), (0, 200, 240), 1)
+
+    # Разделитель
+    header_h = 32
+    cv2.line(sub, (6, header_h), (hud_w - 6, header_h), (40, 52, 70), 1)
+
+    pil_sub = Image.fromarray(cv2.cvtColor(sub, cv2.COLOR_BGR2RGB))
+    draw = ImageDraw.Draw(pil_sub)
+
+    font_head = _get_unicode_font(13, bold=True)
+    font_btn = _get_unicode_font(10, bold=True)
+    font_lbl = _get_unicode_font(11, bold=False)
+    font_val = _get_unicode_font(11, bold=True)
+
+    # Заголовок и время
+    draw.text((8, 6), time_str, font=font_head, fill=(0, 255, 160))
+    draw.text((bx1 + 8, by1 + 3), '+ SELECT', font=font_btn, fill=(220, 240, 255))
+
+    item_h = 24
+    for i, item in enumerate(items_data):
+        iy = header_h + i * item_h + 4
+        bullet_rgb = item.get('bullet_color', (200, 120, 255))
+        draw.ellipse([10, iy + 4, 18, iy + 12], fill=bullet_rgb)
+
+        lbl = str(item.get('label', ''))
+        if len(lbl) > 22:
+            lbl = lbl[:21] + '…'
+        draw.text((24, iy + 1), lbl, font=font_lbl, fill=(210, 220, 230))
+
+        val_str = str(item.get('value', ''))
+        if val_str:
+            val_rgb = item.get('val_color', (0, 240, 220))
+            try:
+                tw = draw.textlength(val_str, font=font_val)
+            except Exception:
+                tw = len(val_str) * 7.0
+            draw.text((hud_w - tw - 10, iy + 1), val_str, font=font_val, fill=val_rgb)
+
+    res = cv2.cvtColor(np.array(pil_sub), cv2.COLOR_RGB2BGR)
+    shown[hud_y:hud_y+hud_h, hud_x:hud_x+hud_w] = res
+
+
+def _render_picker_popup_pil(shown, p_x, p_y, p_w, p_h, all_metrics, curr_sel_set, hx, hy):
+    """
+    Рендеринг интерактивного меню выбора метрик HUD с поддержкой кириллицы (Unicode).
+    """
+    sub = shown[p_y:p_y+p_h, p_x:p_x+p_w]
+    if sub.size == 0 or sub.shape[0] != p_h or sub.shape[1] != p_w:
+        return
+
+    p_ov = sub.copy()
+    cv2.rectangle(p_ov, (0, 0), (p_w, p_h), (12, 16, 24), -1)
+    cv2.addWeighted(p_ov, 0.92, sub, 0.08, 0, sub)
+    cv2.rectangle(sub, (0, 0), (p_w - 1, p_h - 1), (0, 200, 240), 2)
+
+    # Кнопка закрытия [X]
+    cv2.rectangle(sub, (p_w - 24, 6), (p_w - 6, 24), (40, 20, 20), -1)
+    cv2.rectangle(sub, (p_w - 24, 6), (p_w - 6, 24), (200, 60, 60), 1)
+
+    header_h = 32
+    cv2.line(sub, (4, header_h), (p_w - 4, header_h), (50, 65, 85), 1)
+
+    # Строки метрик и чекбоксы
+    row_h = 24
+    for i, (m_k, m_lbl) in enumerate(all_metrics):
+        ry = header_h + i * row_h
+        is_row_hov = (p_x <= hx <= p_x + p_w and p_y + ry <= hy <= p_y + ry + row_h)
+        if is_row_hov:
+            cv2.rectangle(sub, (2, ry + 1), (p_w - 2, ry + row_h - 1), (30, 48, 68), -1)
+
+        is_active = m_k in curr_sel_set
+        cv2.rectangle(sub, (10, ry + 4), (26, ry + 20), (20, 30, 42), -1)
+        cv2.rectangle(sub, (10, ry + 4), (26, ry + 20), (0, 220, 200) if is_active else (80, 95, 115), 1)
+        if is_active:
+            cv2.rectangle(sub, (14, ry + 8), (22, ry + 16), (0, 240, 160), -1)
+
+    # Кнопка «DONE (CLOSE)» внизу
+    by = p_h - 30
+    is_btn_hov = (p_x + 8 <= hx <= p_x + p_w - 8 and p_y + by <= hy <= p_y + by + 24)
+    btn_bg = (25, 120, 60) if is_btn_hov else (20, 90, 45)
+    cv2.rectangle(sub, (8, by), (p_w - 8, by + 24), btn_bg, -1)
+    cv2.rectangle(sub, (8, by), (p_w - 8, by + 24), (80, 255, 140), 1)
+
+    pil_sub = Image.fromarray(cv2.cvtColor(sub, cv2.COLOR_BGR2RGB))
+    draw = ImageDraw.Draw(pil_sub)
+
+    font_title = _get_unicode_font(12, bold=True)
+    font_row = _get_unicode_font(11, bold=False)
+    font_btn = _get_unicode_font(11, bold=True)
+
+    # Заголовок и крестик
+    draw.text((10, 8), 'SELECT HUD METRICS', font=font_title, fill=(0, 240, 220))
+    draw.text((p_w - 18, 6), '✕', font=font_title, fill=(255, 255, 255))
+
+    # Тексты строк
+    for i, (m_k, m_lbl) in enumerate(all_metrics):
+        ry = header_h + i * row_h
+        is_active = m_k in curr_sel_set
+        lbl = str(m_lbl)
+        if len(lbl) > 28:
+            lbl = lbl[:27] + '…'
+        text_color = (245, 245, 245) if is_active else (150, 160, 175)
+        draw.text((34, ry + 4), lbl, font=font_row, fill=text_color)
+
+    # Текст кнопки
+    draw.text((p_w // 2 - 50, by + 4), 'DONE (CLOSE)', font=font_btn, fill=(255, 255, 255))
+
+    res = cv2.cvtColor(np.array(pil_sub), cv2.COLOR_RGB2BGR)
+    shown[p_y:p_y+p_h, p_x:p_x+p_w] = res
 
 
 def run_analysis(config, parent=None, cap=None):
@@ -188,6 +351,7 @@ def run_analysis(config, parent=None, cap=None):
 
     # ROI can be moved and resized while analysis continues.
     roi_drag = {'active': False, 'action': None, 'handle': None, 'start': (0, 0), 'orig': (0, 0, 0, 0), 'frame_w': video_window_w, 'frame_h': video_window_h}
+    config['_roi_dragging'] = False
     HANDLE_SIZE = 14
     MIN_ROI_SIZE = 20
 
@@ -262,96 +426,137 @@ def run_analysis(config, parent=None, cap=None):
                 return name
         return None
 
-    def _trigger_open_hud_picker():
-        """Interactive HUD metric selection dialog for player window sidebar."""
-        def _open():
-            try:
-                from PyQt5 import QtWidgets, QtCore
-                qapp = QtWidgets.QApplication.instance()
-                if qapp:
-                    dlg = QtWidgets.QDialog()
-                    dlg.setWindowTitle("Выбор показателей для HUD плеера")
-                    dlg.resize(400, 480)
-                    dlg.setWindowFlags(dlg.windowFlags() | QtCore.Qt.WindowStaysOnTopHint)
-                    vbox = QtWidgets.QVBoxLayout(dlg)
-
-                    lbl = QtWidgets.QLabel("<b>Выберите графики и параметры для отображения в HUD сбоку плеера:</b>")
-                    lbl.setWordWrap(True)
-                    vbox.addWidget(lbl)
-
-                    lw = QtWidgets.QListWidget()
-                    current_sel = set(config.get('player_hud_metrics', DEFAULT_PLAYER_HUD_METRICS))
-
-                    available = [
-                        ("RGB_sum", "📊 RGB Sum (Сумма R+G+B)"),
-                        ("RGB_sum_slope_30s", "📈 RGB_sum_slope_30s (Наклон 30с)"),
-                        ("Transition_score", "🎯 Transition score (Индекс перехода)"),
-                        ("Log10(B/R)", "📉 Log10(B/R)"),
-                        ("Log10(B/G)", "📉 Log10(B/G)"),
-                        ("R", "🔴 R (Красный канал)"),
-                        ("G", "🟢 G (Зеленый канал)"),
-                        ("B", "🔵 B (Синий канал)"),
-                    ]
-                    for cg in config.get('custom_graphs', []):
-                        cg_name = cg.get('name', '').strip()
-                        if cg_name and not any(k == cg_name for k, _ in available):
-                            available.append((cg_name, f"✨ {cg_name} (Пользовательский график)"))
-
-                    items_map = []
-                    for key, label in available:
-                        it = QtWidgets.QListWidgetItem(label)
-                        it.setFlags(it.flags() | QtCore.Qt.ItemIsUserCheckable)
-                        it.setCheckState(QtCore.Qt.Checked if key in current_sel else QtCore.Qt.Unchecked)
-                        lw.addItem(it)
-                        items_map.append((key, it))
-
-                    vbox.addWidget(lw, 1)
-
-                    btn_box = QtWidgets.QHBoxLayout()
-                    btn_ok = QtWidgets.QPushButton("✔ Применить")
-                    btn_cancel = QtWidgets.QPushButton("Отмена")
-                    btn_box.addWidget(btn_cancel)
-                    btn_box.addWidget(btn_ok)
-                    vbox.addLayout(btn_box)
-
-                    def _on_ok():
-                        new_sel = [key for key, it in items_map if it.checkState() == QtCore.Qt.Checked]
-                        config['player_hud_metrics'] = new_sel
-                        dlg.accept()
-
-                    btn_ok.clicked.connect(_on_ok)
-                    btn_cancel.clicked.connect(dlg.reject)
-                    dlg.exec_()
-            except Exception as e:
-                print(f"⚠️ Ошибка открытия окна выбора метрик HUD: {e}")
-
-        import threading
-        threading.Thread(target=_open, daemon=True).start()
-
     def roi_mouse(event, mx, my, flags, _param):
-        deck_h = 52
-        scrub_y = video_window_h - 44
-        is_started = getattr(camera_worker, 'is_analysis_started', True) if camera_worker else True
+        try:
+            deck_h = 52
+            scrub_y = video_window_h - 44
+            is_started = getattr(camera_worker, 'is_analysis_started', True) if camera_worker else True
 
-        if event == cv2.EVENT_LBUTTONDOWN:
-            # Клик по боковой HUD-сноске справа (выбор отображаемых графиков / метрик)
-            hud_x = roi_drag.get('hud_x', -1)
-            hud_y = roi_drag.get('hud_y', -1)
-            hud_w = roi_drag.get('hud_w', 0)
-            hud_h = roi_drag.get('hud_h', 0)
-            if hud_x > 0 and hud_x <= mx <= hud_x + hud_w and hud_y <= my <= hud_y + hud_h:
-                _trigger_open_hud_picker()
-                return
-
-        if is_file:
+            # Track mouse hover coordinates
             roi_drag['hover_x'] = mx
             roi_drag['hover_y'] = my
 
+            # 1. Если открыто интерактивное меню выбора метрик HUD прямо в плеере:
+            if bool(roi_drag.get('hud_picker_open', False)):
+                px = roi_drag.get('picker_x', -1)
+                py = roi_drag.get('picker_y', -1)
+                pw = roi_drag.get('picker_w', 0)
+                ph = roi_drag.get('picker_h', 0)
+                header_h = 32
+                row_h = roi_drag.get('picker_row_h', 24)
+                metrics = roi_drag.get('picker_metrics', [])
+
+                if event == cv2.EVENT_LBUTTONDOWN:
+                    # Клик вне окна меню выбора метрик -> закрыть меню
+                    if not (px <= mx <= px + pw and py <= my <= py + ph):
+                        roi_drag['hud_picker_open'] = False
+                        return
+
+                    # Клик по кнопке [X] закрытия (справа вверху)
+                    if (px + pw - 28 <= mx <= px + pw - 4) and (py + 4 <= my <= py + 26):
+                        roi_drag['hud_picker_open'] = False
+                        return
+
+                    # Клик по кнопке [ DONE (CLOSE) ] внизу
+                    by = py + ph - 30
+                    if (px + 8 <= mx <= px + pw - 8) and (by <= my <= by + 26):
+                        roi_drag['hud_picker_open'] = False
+                        return
+
+                    # Клик по строке конкретной метрики -> переключить чекбокс
+                    if py + header_h <= my < by:
+                        row_idx = int((my - (py + header_h)) // row_h)
+                        if 0 <= row_idx < len(metrics):
+                            k = metrics[row_idx][0]
+                            cur = list(config.get('player_hud_metrics', DEFAULT_PLAYER_HUD_METRICS))
+                            if k in cur:
+                                cur.remove(k)
+                            else:
+                                cur.append(k)
+                            config['player_hud_metrics'] = cur
+                            return
+                    return
+                return
+
+            # 2. Если меню закрыто: клик по боковой HUD-сноске для открытия меню выбора
             if event == cv2.EVENT_LBUTTONDOWN:
-                # 1. Клик по нижней полосе перемотки (YouTube Scrub Bar)
-                if abs(my - scrub_y) <= 12 or (video_window_h - deck_h <= my <= video_window_h - 36):
-                    roi_drag['action'] = 'timeline_scrub'
-                    roi_drag['active'] = True
+                hud_x = roi_drag.get('hud_x', -1)
+                hud_y = roi_drag.get('hud_y', -1)
+                hud_w = roi_drag.get('hud_w', 0)
+                hud_h = roi_drag.get('hud_h', 0)
+                if hud_x > 0 and hud_x <= mx <= hud_x + hud_w and hud_y <= my <= hud_y + hud_h:
+                    roi_drag['hud_picker_open'] = True
+                    return
+
+            if is_file:
+                roi_drag['hover_x'] = mx
+                roi_drag['hover_y'] = my
+
+                if event == cv2.EVENT_LBUTTONDOWN:
+                    # 1. Клик по нижней полосе перемотки (YouTube Scrub Bar)
+                    if abs(my - scrub_y) <= 12 or (video_window_h - deck_h <= my <= video_window_h - 36):
+                        roi_drag['action'] = 'timeline_scrub'
+                        roi_drag['active'] = True
+                        tot_f = max(1, int(camera_worker.total_frames if camera_worker else 100))
+                        bar_w = max(1, video_window_w - 24)
+                        pct = max(0.0, min(1.0, (mx - 12) / float(bar_w)))
+                        target_frame = int(pct * tot_f)
+                        if camera_worker is not None:
+                            camera_worker.seek_to_frame(target_frame)
+                        return
+
+                    # 2. Клик по кнопкам нижней панели YouTube Deck
+                    if my > video_window_h - 36:
+                        # Кнопка Play / Pause / Start (x = 10..48)
+                        if 10 <= mx <= 48:
+                            if camera_worker is not None:
+                                if not is_started:
+                                    camera_worker.start_analysis()
+                                else:
+                                    camera_worker.toggle_pause()
+                            return
+
+                        speed_x1 = max(300, min(350, video_window_w - 340))
+
+                        # Переключение скорости (Speed Badge)
+                        if is_started and (speed_x1 <= mx <= speed_x1 + 52):
+                            if camera_worker is not None:
+                                speeds = [0.25, 0.5, 1.0, 1.5, 2.0, 4.0, 8.0]
+                                cur_spd = camera_worker.playback_speed
+                                next_spd = 1.0
+                                for s in speeds:
+                                    if s > cur_spd + 0.05:
+                                        next_spd = s
+                                        break
+                                else:
+                                    next_spd = speeds[0]
+                                camera_worker.set_speed(next_spd)
+                            return
+
+                        # Кнопка [S] Snap ROI в режиме настройки
+                        snap_bx1 = max(300, video_window_w - 305)
+                        snap_bx2 = snap_bx1 + 130
+                        if not is_started and (snap_bx1 <= mx <= snap_bx2):
+                            _trigger_snap_roi()
+                            return
+
+                        # Кнопка [START [ENTER]] в режиме настройки
+                        start_bx1 = snap_bx2 + 10
+                        start_bx2 = video_window_w - 12
+                        if not is_started and (start_bx1 <= mx <= start_bx2):
+                            if camera_worker is not None:
+                                camera_worker.start_analysis()
+                            return
+
+                        # Кнопка [R] Reset ROI в режиме активного анализа
+                        rst_bx1 = max(video_window_w - 140, speed_x1 + 175)
+                        rst_bx2 = video_window_w - 12
+                        if is_started and (rst_bx1 <= mx <= rst_bx2):
+                            if camera_worker is not None:
+                                camera_worker.reset_to_setup_mode()
+                            return
+
+                elif event == cv2.EVENT_MOUSEMOVE and roi_drag.get('action') == 'timeline_scrub' and roi_drag.get('active'):
                     tot_f = max(1, int(camera_worker.total_frames if camera_worker else 100))
                     bar_w = max(1, video_window_w - 24)
                     pct = max(0.0, min(1.0, (mx - 12) / float(bar_w)))
@@ -360,207 +565,154 @@ def run_analysis(config, parent=None, cap=None):
                         camera_worker.seek_to_frame(target_frame)
                     return
 
-                # 2. Клик по кнопкам нижней панели YouTube Deck
-                if my > video_window_h - 36:
-                    # Кнопка Play / Pause / Start (x = 10..48)
-                    if 10 <= mx <= 48:
-                        if camera_worker is not None:
-                            if not is_started:
-                                camera_worker.start_analysis()
-                            else:
-                                camera_worker.toggle_pause()
-                        return
+                elif event == cv2.EVENT_LBUTTONUP and roi_drag.get('action') == 'timeline_scrub':
+                    roi_drag['active'] = False
+                    roi_drag['action'] = None
+                    return
 
-                    speed_x1 = max(300, min(350, video_window_w - 340))
-
-                    # Переключение скорости (Speed Badge)
-                    if is_started and (speed_x1 <= mx <= speed_x1 + 52):
-                        if camera_worker is not None:
-                            speeds = [0.25, 0.5, 1.0, 1.5, 2.0, 4.0, 8.0]
-                            cur_spd = camera_worker.playback_speed
-                            next_spd = 1.0
-                            for s in speeds:
-                                if s > cur_spd + 0.05:
-                                    next_spd = s
-                                    break
-                            else:
-                                next_spd = speeds[0]
-                            camera_worker.set_speed(next_spd)
-                        return
-
-                    # Кнопка [S] Snap ROI в режиме настройки
-                    snap_bx1 = max(300, video_window_w - 305)
-                    snap_bx2 = snap_bx1 + 130
-                    if not is_started and (snap_bx1 <= mx <= snap_bx2):
-                        _trigger_snap_roi()
-                        return
-
-                    # Кнопка [START [ENTER]] в режиме настройки
-                    start_bx1 = snap_bx2 + 10
-                    start_bx2 = video_window_w - 12
-                    if not is_started and (start_bx1 <= mx <= start_bx2):
-                        if camera_worker is not None:
-                            camera_worker.start_analysis()
-                        return
-
-                    # Кнопка [R] Reset ROI в режиме активного анализа
-                    rst_bx1 = max(video_window_w - 140, speed_x1 + 175)
-                    rst_bx2 = video_window_w - 12
-                    if is_started and (rst_bx1 <= mx <= rst_bx2):
-                        if camera_worker is not None:
-                            camera_worker.reset_to_setup_mode()
-                        return
-
-            elif event == cv2.EVENT_MOUSEMOVE and roi_drag.get('action') == 'timeline_scrub' and roi_drag.get('active'):
-                tot_f = max(1, int(camera_worker.total_frames if camera_worker else 100))
-                bar_w = max(1, video_window_w - 24)
-                pct = max(0.0, min(1.0, (mx - 12) / float(bar_w)))
-                target_frame = int(pct * tot_f)
-                if camera_worker is not None:
-                    camera_worker.seek_to_frame(target_frame)
+            # Во время активного анализа видеофайла ROI заблокирован от случайных смещений ("кружок больше не может двигаться")
+            if is_file and is_started:
+                if event == cv2.EVENT_LBUTTONDOWN and my < video_window_h - deck_h - 8:
+                    roi_drag['toast_time'] = time.time() + 2.0
+                    roi_drag['toast_msg'] = "ROI LOCKED: Press [R] to Reset & Adjust"
                 return
 
-            elif event == cv2.EVENT_LBUTTONUP and roi_drag.get('action') == 'timeline_scrub':
+            # Клик по нижней панели deck в видео не должен перемещать ROI
+            if is_file and my >= video_window_h - deck_h:
+                return
+
+            # Живая камера: клики по нижней панели управления ROI
+            if not is_file:
+                live_deck_h = 44
+                if my >= video_window_h - live_deck_h:
+                    if event == cv2.EVENT_LBUTTONDOWN:
+                        btn_center_w = 95
+                        btn_lock_w = 115
+                        btn_shape_w = 115
+
+                        btn_center_x2 = video_window_w - 10
+                        btn_center_x1 = btn_center_x2 - btn_center_w
+                        btn_lock_x2 = btn_center_x1 - 8
+                        btn_lock_x1 = btn_lock_x2 - btn_lock_w
+                        btn_shape_x2 = btn_lock_x1 - 8
+                        btn_shape_x1 = max(btn_shape_x2 - btn_shape_w, 240)
+
+                        if btn_shape_x1 <= mx <= btn_shape_x2:
+                            _trigger_toggle_shape()
+                            return
+                        if btn_lock_x1 <= mx <= btn_lock_x2:
+                            _trigger_toggle_lock()
+                            return
+                        if btn_center_x1 <= mx <= btn_center_x2:
+                            _trigger_center_roi()
+                            return
+                    return
+
+                # Заблокированный ROI в режиме живой камеры
+                if config.get('roi_locked', False):
+                    if event == cv2.EVENT_LBUTTONDOWN:
+                        roi_drag['toast_time'] = time.time() + 2.0
+                        roi_drag['toast_msg'] = "ROI LOCKED: Press [L] to Unlock"
+                    return
+
+            # Перемотка колесиком мыши
+            if is_file and event == cv2.EVENT_MOUSEWHEEL:
+                step_s = float(config.get('seek_step_sec', 5.0))
+                if camera_worker is not None:
+                    if flags > 0:
+                        camera_worker.seek_relative(step_s)
+                    else:
+                        camera_worker.seek_relative(-step_s)
+                return
+
+            if not config.get('live_roi', True):
+                return
+            frame_w = max(1, int(roi_drag.get('frame_w', video_window_w)))
+            frame_h = max(1, int(roi_drag.get('frame_h', video_window_h)))
+            sx = frame_w / max(1, video_window_w)
+            sy = frame_h / max(1, video_window_h)
+            x = int(round(mx * sx))
+            y = int(round(my * sy))
+            x = max(0, min(frame_w - 1, x))
+            y = max(0, min(frame_h - 1, y))
+            x0 = int(config.get('roi_x', 0))
+            y0 = int(config.get('roi_y', 0))
+            w = max(MIN_ROI_SIZE, int(config.get('roi_w', 20)))
+            h = max(MIN_ROI_SIZE, int(config.get('roi_h', 20)))
+            x1, y1 = x0 + w, y0 + h
+
+            if event == cv2.EVENT_LBUTTONDOWN:
+                if config.get('roi_shape', 'rect') == 'circle' and config.get('allow_roi_resize', True):
+                    cx, cy = x0 + w / 2.0, y0 + h / 2.0
+                    radius = min(w, h) / 2.0
+                    dist = ((x - cx) ** 2 + (y - cy) ** 2) ** 0.5
+                    if abs(dist - radius) <= HANDLE_SIZE:
+                        config['_roi_dragging'] = True
+                        roi_drag.update(active=True, action='resize_circle', handle=None, start=(x, y), orig=(x0, y0, w, h))
+                        return
+                    elif dist <= radius:
+                        config['_roi_dragging'] = True
+                        roi_drag.update(active=True, action='move', handle=None, start=(x, y), orig=(x0, y0, w, h))
+                        return
+                handle = _roi_handle(x, y, x0, y0, x1, y1) if (config.get('allow_roi_resize', True) and config.get('roi_shape', 'rect') != 'circle') else None
+                if handle:
+                    config['_roi_dragging'] = True
+                    roi_drag.update(active=True, action='resize', handle=handle, start=(x, y), orig=(x0, y0, w, h))
+                elif x0 <= x <= x1 and y0 <= y <= y1:
+                    config['_roi_dragging'] = True
+                    roi_drag.update(active=True, action='move', handle=None, start=(x, y), orig=(x0, y0, w, h))
+                else:
+                    # Клик в свободную область — мгновенный перенос центра ROI в точку клика
+                    nx = max(0, min(int(x - w / 2), frame_w - w))
+                    ny = max(0, min(int(y - h / 2), frame_h - h))
+                    config['roi_x'], config['roi_y'] = nx, ny
+                    config['_roi_dragging'] = True
+                    roi_drag.update(active=True, action='move', handle=None, start=(x, y), orig=(nx, ny, w, h))
+                return
+
+            if event == cv2.EVENT_MOUSEMOVE and roi_drag['active']:
+                ox, oy, ow, oh = roi_drag['orig']
+                if roi_drag['action'] == 'move':
+                    dx, dy = x - roi_drag['start'][0], y - roi_drag['start'][1]
+                    nx = max(0, min(ox + dx, max(0, frame_w - ow)))
+                    ny = max(0, min(oy + dy, max(0, frame_h - oh)))
+                    config['roi_x'], config['roi_y'] = int(nx), int(ny)
+                elif roi_drag['action'] == 'resize_circle':
+                    cx, cy = ox + ow / 2.0, oy + oh / 2.0
+                    radius = max(MIN_ROI_SIZE / 2.0, ((x - cx) ** 2 + (y - cy) ** 2) ** 0.5)
+                    size = int(max(MIN_ROI_SIZE, min(2 * radius, min(frame_w, frame_h))))
+                    nx = max(0, min(int(cx - size / 2), frame_w - size))
+                    ny = max(0, min(int(cy - size / 2), frame_h - size))
+                    config['roi_x'], config['roi_y'] = nx, ny
+                    config['roi_w'], config['roi_h'] = size, size
+                else:
+                    nx0, ny0, nx1, ny1 = ox, oy, ox + ow, oy + oh
+                    handle = roi_drag['handle']
+                    if 'left' in handle:
+                        nx0 = min(x, nx1 - MIN_ROI_SIZE)
+                    if 'right' in handle:
+                        nx1 = max(x, nx0 + MIN_ROI_SIZE)
+                    if 'top' in handle:
+                        ny0 = min(y, ny1 - MIN_ROI_SIZE)
+                    if 'bottom' in handle:
+                        ny1 = max(y, ny0 + MIN_ROI_SIZE)
+                    nx0 = max(0, nx0)
+                    ny0 = max(0, ny0)
+                    nx1 = min(frame_w, nx1)
+                    ny1 = min(frame_h, ny1)
+                    if nx1 - nx0 >= MIN_ROI_SIZE and ny1 - ny0 >= MIN_ROI_SIZE:
+                        config['roi_x'], config['roi_y'] = int(nx0), int(ny0)
+                        config['roi_w'], config['roi_h'] = int(nx1 - nx0), int(ny1 - ny0)
+                return
+
+            if event == cv2.EVENT_LBUTTONUP:
                 roi_drag['active'] = False
                 roi_drag['action'] = None
-                return
-
-        # Во время активного анализа видеофайла ROI заблокирован от случайных смещений ("кружок больше не может двигаться")
-        if is_file and is_started:
-            if event == cv2.EVENT_LBUTTONDOWN and my < video_window_h - deck_h - 8:
-                roi_drag['toast_time'] = time.time() + 2.0
-                roi_drag['toast_msg'] = "ROI LOCKED: Press [R] to Reset & Adjust"
-            return
-
-        # Клик по нижней панели deck в видео не должен перемещать ROI
-        if is_file and my >= video_window_h - deck_h:
-            return
-
-        # Живая камера: клики по нижней панели управления ROI
-        if not is_file:
-            live_deck_h = 44
-            if my >= video_window_h - live_deck_h:
-                if event == cv2.EVENT_LBUTTONDOWN:
-                    btn_center_w = 95
-                    btn_lock_w = 115
-                    btn_shape_w = 115
-
-                    btn_center_x2 = video_window_w - 10
-                    btn_center_x1 = btn_center_x2 - btn_center_w
-                    btn_lock_x2 = btn_center_x1 - 8
-                    btn_lock_x1 = btn_lock_x2 - btn_lock_w
-                    btn_shape_x2 = btn_lock_x1 - 8
-                    btn_shape_x1 = max(btn_shape_x2 - btn_shape_w, 240)
-
-                    if btn_shape_x1 <= mx <= btn_shape_x2:
-                        _trigger_toggle_shape()
-                        return
-                    if btn_lock_x1 <= mx <= btn_lock_x2:
-                        _trigger_toggle_lock()
-                        return
-                    if btn_center_x1 <= mx <= btn_center_x2:
-                        _trigger_center_roi()
-                        return
-                return
-
-            # Заблокированный ROI в режиме живой камеры
-            if config.get('roi_locked', False):
-                if event == cv2.EVENT_LBUTTONDOWN:
-                    roi_drag['toast_time'] = time.time() + 2.0
-                    roi_drag['toast_msg'] = "ROI LOCKED: Press [L] to Unlock"
-                return
-
-        # Перемотка колесиком мыши
-        if is_file and event == cv2.EVENT_MOUSEWHEEL:
-            step_s = float(config.get('seek_step_sec', 5.0))
-            if camera_worker is not None:
-                if flags > 0:
-                    camera_worker.seek_relative(step_s)
-                else:
-                    camera_worker.seek_relative(-step_s)
-            return
-
-        if not config.get('live_roi', True):
-            return
-        frame_w = max(1, int(roi_drag.get('frame_w', video_window_w)))
-        frame_h = max(1, int(roi_drag.get('frame_h', video_window_h)))
-        sx = frame_w / max(1, video_window_w)
-        sy = frame_h / max(1, video_window_h)
-        x = int(round(mx * sx))
-        y = int(round(my * sy))
-        x = max(0, min(frame_w - 1, x))
-        y = max(0, min(frame_h - 1, y))
-        x0 = int(config.get('roi_x', 0))
-        y0 = int(config.get('roi_y', 0))
-        w = max(MIN_ROI_SIZE, int(config.get('roi_w', 20)))
-        h = max(MIN_ROI_SIZE, int(config.get('roi_h', 20)))
-        x1, y1 = x0 + w, y0 + h
-
-        if event == cv2.EVENT_LBUTTONDOWN:
-            if config.get('roi_shape', 'rect') == 'circle' and config.get('allow_roi_resize', True):
-                cx, cy = x0 + w / 2.0, y0 + h / 2.0
-                radius = min(w, h) / 2.0
-                dist = ((x - cx) ** 2 + (y - cy) ** 2) ** 0.5
-                if abs(dist - radius) <= HANDLE_SIZE:
-                    roi_drag.update(active=True, action='resize_circle', handle=None, start=(x, y), orig=(x0, y0, w, h))
-                    return
-                elif dist <= radius:
-                    roi_drag.update(active=True, action='move', handle=None, start=(x, y), orig=(x0, y0, w, h))
-                    return
-            handle = _roi_handle(x, y, x0, y0, x1, y1) if (config.get('allow_roi_resize', True) and config.get('roi_shape', 'rect') != 'circle') else None
-            if handle:
-                roi_drag.update(active=True, action='resize', handle=handle, start=(x, y), orig=(x0, y0, w, h))
-            elif x0 <= x <= x1 and y0 <= y <= y1:
-                roi_drag.update(active=True, action='move', handle=None, start=(x, y), orig=(x0, y0, w, h))
-            else:
-                # Клик в свободную область — мгновенный перенос центра ROI в точку клика
-                nx = max(0, min(int(x - w / 2), frame_w - w))
-                ny = max(0, min(int(y - h / 2), frame_h - h))
-                config['roi_x'], config['roi_y'] = nx, ny
-                roi_drag.update(active=True, action='move', handle=None, start=(x, y), orig=(nx, ny, w, h))
-            return
-
-        if event == cv2.EVENT_MOUSEMOVE and roi_drag['active']:
-            ox, oy, ow, oh = roi_drag['orig']
-            if roi_drag['action'] == 'move':
-                dx, dy = x - roi_drag['start'][0], y - roi_drag['start'][1]
-                nx = max(0, min(ox + dx, max(0, frame_w - ow)))
-                ny = max(0, min(oy + dy, max(0, frame_h - oh)))
-                config['roi_x'], config['roi_y'] = int(nx), int(ny)
-            elif roi_drag['action'] == 'resize_circle':
-                cx, cy = ox + ow / 2.0, oy + oh / 2.0
-                radius = max(MIN_ROI_SIZE / 2.0, ((x - cx) ** 2 + (y - cy) ** 2) ** 0.5)
-                size = int(max(MIN_ROI_SIZE, min(2 * radius, min(frame_w, frame_h))))
-                nx = max(0, min(int(cx - size / 2), frame_w - size))
-                ny = max(0, min(int(cy - size / 2), frame_h - size))
-                config['roi_x'], config['roi_y'] = nx, ny
-                config['roi_w'], config['roi_h'] = size, size
-            else:
-                nx0, ny0, nx1, ny1 = ox, oy, ox + ow, oy + oh
-                handle = roi_drag['handle']
-                if 'left' in handle:
-                    nx0 = min(x, nx1 - MIN_ROI_SIZE)
-                if 'right' in handle:
-                    nx1 = max(x, nx0 + MIN_ROI_SIZE)
-                if 'top' in handle:
-                    ny0 = min(y, ny1 - MIN_ROI_SIZE)
-                if 'bottom' in handle:
-                    ny1 = max(y, ny0 + MIN_ROI_SIZE)
-                nx0 = max(0, nx0)
-                ny0 = max(0, ny0)
-                nx1 = min(frame_w, nx1)
-                ny1 = min(frame_h, ny1)
-                if nx1 - nx0 >= MIN_ROI_SIZE and ny1 - ny0 >= MIN_ROI_SIZE:
-                    config['roi_x'], config['roi_y'] = int(nx0), int(ny0)
-                    config['roi_w'], config['roi_h'] = int(nx1 - nx0), int(ny1 - ny0)
-            return
-
-        if event == cv2.EVENT_LBUTTONUP:
-            roi_drag['active'] = False
-            roi_drag['action'] = None
-            roi_drag['handle'] = None
-            roi_drag['action'] = None
-            roi_drag['handle'] = None
+                roi_drag['handle'] = None
+                config['_roi_dragging'] = False
+        except Exception:
+            # Completely exception-safe to prevent OpenCV UI loop freezing
+            pass
 
     if show_video_window:
         cv2.setMouseCallback(WINDOW_NAME, roi_mouse)
@@ -644,7 +796,8 @@ def run_analysis(config, parent=None, cap=None):
         )
         print(f"❌ {msg}")
         if camera_worker is not None:
-            camera_worker.stop()
+            config['_roi_dragging'] = False
+        camera_worker.stop()
         if cap is not None and hasattr(cap, 'release'):
             try:
                 cap.release()
@@ -678,7 +831,7 @@ def run_analysis(config, parent=None, cap=None):
         snap_toast_msg = ""
 
         while not should_close:
-            snap = camera_worker.snapshot()
+            snap = camera_worker.snapshot(copy_frame=False)
             try:
                 now_ms = int((time.time() - start_time) * 1000)
                 if snap['graph_version'] != last_graph_version and now_ms >= pg_last_update + int(config.get('graph_update_ms', 120)):
@@ -839,8 +992,10 @@ def run_analysis(config, parent=None, cap=None):
             config['roi_w'] = int(max(MIN_ROI_SIZE, min(config.get('roi_w', 20), w_f - config['roi_x'])))
             config['roi_h'] = int(max(MIN_ROI_SIZE, min(config.get('roi_h', 20), h_f - config['roi_y'])))
 
-            # Мгновенно пересчитываем средние и границы ROI прямо по текущему кадру для отрисовки
-            mean_b, mean_g, mean_r, safe_x, safe_y, safe_w, safe_h, _, _ = compute_roi_means(frame, config)
+            # Worker already calculated ROI for this frame; reuse it on the GUI thread.
+            mean_b, mean_g, mean_r = snap.get('means', (0.0, 0.0, 0.0))
+            roi_info = snap.get('roi_info') or (config.get('roi_x', 0), config.get('roi_y', 0), config.get('roi_w', 20), config.get('roi_h', 20), h_f, w_f)
+            safe_x, safe_y, safe_w, safe_h = map(int, roi_info[:4])
 
             if is_file:
                 cur_f = snap.get('file_frame_index', 0)
@@ -897,116 +1052,217 @@ def run_analysis(config, parent=None, cap=None):
                 shown = cv2.resize(display_frame, (video_window_w, video_window_h), interpolation=cv2.INTER_LINEAR)
 
                 # 1. Информационная боковая HUD-сноска справа (Real-time Sidebar HUD с выбором анализируемых графиков)
-                hud_metrics = config.get('player_hud_metrics', DEFAULT_PLAYER_HUD_METRICS)
-                if not isinstance(hud_metrics, list) or len(hud_metrics) == 0:
-                    hud_metrics = list(DEFAULT_PLAYER_HUD_METRICS)
+                is_picker_open = bool(roi_drag.get('hud_picker_open', False))
 
-                hud_w = 230
-                hud_x = video_window_w - hud_w - 10
-                hud_y = 10
-                header_h = 32
-                item_h = 24
-                hud_h = header_h + len(hud_metrics) * item_h + 10
-                roi_drag['hud_x'], roi_drag['hud_y'] = hud_x, hud_y
-                roi_drag['hud_w'], roi_drag['hud_h'] = hud_w, hud_h
+                # Список доступных для выбора метрик и графиков с полной поддержкой кириллицы (Unicode)
+                all_metrics = [
+                    ("RGB_sum", "RGB Sum (R+G+B)"),
+                    ("Log10(B/G)", "Log10(B/G)"),
+                    ("Log10(B/R)", "Log10(B/R)"),
+                    ("Transition_score", "Transition (Индекс)"),
+                    ("RGB_sum_slope_30s", "Slope 30s (Тренд)"),
+                    ("R", "R (Красный)"),
+                    ("G", "G (Зеленый)"),
+                    ("B", "B (Синий)"),
+                ]
+                for cg in config.get('custom_graphs', []):
+                    cg_name = cg.get('name', '').strip()
+                    if cg_name and not any(k == cg_name for k, _ in all_metrics):
+                        all_metrics.append((cg_name, cg_name))
 
-                hud_overlay = shown.copy()
-                cv2.rectangle(hud_overlay, (hud_x, hud_y), (hud_x + hud_w, hud_y + hud_h), (14, 18, 26), -1)
-                cv2.addWeighted(hud_overlay, 0.85, shown, 0.15, 0, shown)
-                cv2.rectangle(shown, (hud_x, hud_y), (hud_x + hud_w, hud_y + hud_h), (48, 62, 80), 1)
+                if is_picker_open:
+                    p_w = 280
+                    p_x = video_window_w - p_w - 10
+                    p_y = 10
+                    header_h = 32
+                    row_h = 24
+                    p_h = header_h + len(all_metrics) * row_h + 38
+                    roi_drag['picker_x'], roi_drag['picker_y'] = p_x, p_y
+                    roi_drag['picker_w'], roi_drag['picker_h'] = p_w, p_h
+                    roi_drag['picker_row_h'] = row_h
+                    roi_drag['picker_metrics'] = all_metrics
 
-                # Заголовок HUD и время
-                time_str = f"T: {hours:02d}:{mins:02d}:{secs:02d}"
-                cv2.putText(shown, time_str, (hud_x + 8, hud_y + 20), cv2.FONT_HERSHEY_SIMPLEX, 0.44, (0, 255, 160), 1, cv2.LINE_AA)
+                    curr_sel_set = set(config.get('player_hud_metrics', DEFAULT_PLAYER_HUD_METRICS))
+                    hx, hy = roi_drag.get('hover_x', -1), roi_drag.get('hover_y', -1)
+                    _render_picker_popup_pil(shown, p_x, p_y, p_w, p_h, all_metrics, curr_sel_set, hx, hy)
+                else:
+                    # Обычный режим отображения HUD-сноски
+                    hud_metrics = config.get('player_hud_metrics', DEFAULT_PLAYER_HUD_METRICS)
+                    if not isinstance(hud_metrics, list) or len(hud_metrics) == 0:
+                        hud_metrics = list(DEFAULT_PLAYER_HUD_METRICS)
 
-                # Кнопка [+ Выбор]
-                btn_w = 68
-                btn_h = 20
-                bx1 = hud_x + hud_w - btn_w - 6
-                by1 = hud_y + 5
-                cv2.rectangle(shown, (bx1, by1), (bx1 + btn_w, by1 + btn_h), (25, 36, 52), -1)
-                cv2.rectangle(shown, (bx1, by1), (bx1 + btn_w, by1 + btn_h), (0, 200, 240), 1)
-                cv2.putText(shown, "+ Выбор", (bx1 + 6, by1 + 14), cv2.FONT_HERSHEY_SIMPLEX, 0.36, (220, 240, 255), 1, cv2.LINE_AA)
+                    hud_w = 280
+                    hud_x = video_window_w - hud_w - 10
+                    hud_y = 10
+                    header_h = 32
+                    item_h = 24
+                    hud_h = header_h + len(hud_metrics) * item_h + 10
+                    roi_drag['hud_x'], roi_drag['hud_y'] = hud_x, hud_y
+                    roi_drag['hud_w'], roi_drag['hud_h'] = hud_w, hud_h
 
-                # Разделитель
-                cv2.line(shown, (hud_x + 6, hud_y + header_h), (hud_x + hud_w - 6, hud_y + header_h), (40, 52, 70), 1)
+                    # Заголовок HUD и время
+                    time_str = f"T: {hours:02d}:{mins:02d}:{secs:02d}"
 
-                # Значения метрик
-                slope30_val = np.nan
-                try:
-                    slope30_arr = snap.get('graph_rgb_sum_slope30')
-                    if slope30_arr is not None and len(slope30_arr):
-                        slope30_val = float(slope30_arr[-1])
-                except Exception:
-                    pass
+                    # Значения метрик
+                    slope30_val = np.nan
+                    try:
+                        slope30_arr = snap.get('graph_rgb_sum_slope30')
+                        if slope30_arr is not None and len(slope30_arr):
+                            slope30_val = float(slope30_arr[-1])
+                    except Exception:
+                        pass
 
-                score_val = np.nan
-                try:
-                    score_arr = snap.get('graph_transition_score')
-                    if score_arr is not None and len(score_arr):
-                        score_val = float(score_arr[-1])
-                except Exception:
-                    pass
+                    score_val = np.nan
+                    try:
+                        score_arr = snap.get('graph_transition_score')
+                        if score_arr is not None and len(score_arr):
+                            score_val = float(score_arr[-1])
+                    except Exception:
+                        pass
 
-                log_br_val = np.log10(mean_b / mean_r) if mean_r > 0 and mean_b > 0 else np.nan
-                log_bg_val = np.log10(mean_b / mean_g) if mean_g > 0 and mean_b > 0 else np.nan
-                rgb_sum_val = mean_r + mean_g + mean_b
+                    log_br_val = np.log10(mean_b / mean_r) if mean_r > 0 and mean_b > 0 else np.nan
+                    log_bg_val = np.log10(mean_b / mean_g) if mean_g > 0 and mean_b > 0 else np.nan
+                    rgb_sum_val = mean_r + mean_g + mean_b
 
-                curr_y = hud_y + header_h + 17
-                for m_key in hud_metrics:
-                    if m_key == 'R':
-                        cv2.circle(shown, (hud_x + 14, curr_y - 4), 4, (60, 60, 240), -1)
-                        cv2.putText(shown, "R (Red):", (hud_x + 24, curr_y), cv2.FONT_HERSHEY_SIMPLEX, 0.38, (200, 200, 200), 1, cv2.LINE_AA)
-                        cv2.putText(shown, f"{mean_r:.1f}", (hud_x + 140, curr_y), cv2.FONT_HERSHEY_SIMPLEX, 0.38, (100, 100, 255), 1, cv2.LINE_AA)
-                    elif m_key == 'G':
-                        cv2.circle(shown, (hud_x + 14, curr_y - 4), 4, (60, 220, 80), -1)
-                        cv2.putText(shown, "G (Green):", (hud_x + 24, curr_y), cv2.FONT_HERSHEY_SIMPLEX, 0.38, (200, 200, 200), 1, cv2.LINE_AA)
-                        cv2.putText(shown, f"{mean_g:.1f}", (hud_x + 140, curr_y), cv2.FONT_HERSHEY_SIMPLEX, 0.38, (100, 255, 120), 1, cv2.LINE_AA)
-                    elif m_key == 'B':
-                        cv2.circle(shown, (hud_x + 14, curr_y - 4), 4, (240, 160, 60), -1)
-                        cv2.putText(shown, "B (Blue):", (hud_x + 24, curr_y), cv2.FONT_HERSHEY_SIMPLEX, 0.38, (200, 200, 200), 1, cv2.LINE_AA)
-                        cv2.putText(shown, f"{mean_b:.1f}", (hud_x + 140, curr_y), cv2.FONT_HERSHEY_SIMPLEX, 0.38, (255, 190, 100), 1, cv2.LINE_AA)
-                    elif m_key == 'RGB_sum':
-                        cv2.circle(shown, (hud_x + 14, curr_y - 4), 4, (220, 220, 0), -1)
-                        cv2.putText(shown, "RGB Sum:", (hud_x + 24, curr_y), cv2.FONT_HERSHEY_SIMPLEX, 0.38, (200, 200, 200), 1, cv2.LINE_AA)
-                        cv2.putText(shown, f"{rgb_sum_val:.1f}", (hud_x + 140, curr_y), cv2.FONT_HERSHEY_SIMPLEX, 0.38, (240, 240, 60), 1, cv2.LINE_AA)
-                    elif m_key == 'RGB_sum_slope_30s':
-                        cv2.circle(shown, (hud_x + 14, curr_y - 4), 4, (120, 240, 140), -1)
-                        cv2.putText(shown, "Slope 30s:", (hud_x + 24, curr_y), cv2.FONT_HERSHEY_SIMPLEX, 0.38, (200, 200, 200), 1, cv2.LINE_AA)
-                        sl_str = f"{slope30_val:+.2f}/s" if np.isfinite(slope30_val) else "--"
-                        cv2.putText(shown, sl_str, (hud_x + 140, curr_y), cv2.FONT_HERSHEY_SIMPLEX, 0.38, (120, 255, 140), 1, cv2.LINE_AA)
-                    elif m_key == 'Transition_score':
-                        cv2.circle(shown, (hud_x + 14, curr_y - 4), 4, (80, 180, 255), -1)
-                        cv2.putText(shown, "Transition:", (hud_x + 24, curr_y), cv2.FONT_HERSHEY_SIMPLEX, 0.38, (200, 200, 200), 1, cv2.LINE_AA)
-                        sc_str = f"{score_val:.2f}" if np.isfinite(score_val) else "--"
-                        cv2.putText(shown, sc_str, (hud_x + 140, curr_y), cv2.FONT_HERSHEY_SIMPLEX, 0.38, (80, 200, 255), 1, cv2.LINE_AA)
-                    elif m_key == 'Log10(B/R)':
-                        cv2.circle(shown, (hud_x + 14, curr_y - 4), 4, (50, 170, 255), -1)
-                        cv2.putText(shown, "Log10(B/R):", (hud_x + 24, curr_y), cv2.FONT_HERSHEY_SIMPLEX, 0.38, (200, 200, 200), 1, cv2.LINE_AA)
-                        lbr_str = f"{log_br_val:.4f}" if np.isfinite(log_br_val) else "--"
-                        cv2.putText(shown, lbr_str, (hud_x + 140, curr_y), cv2.FONT_HERSHEY_SIMPLEX, 0.38, (80, 190, 255), 1, cv2.LINE_AA)
-                    elif m_key == 'Log10(B/G)':
-                        cv2.circle(shown, (hud_x + 14, curr_y - 4), 4, (255, 200, 100), -1)
-                        cv2.putText(shown, "Log10(B/G):", (hud_x + 24, curr_y), cv2.FONT_HERSHEY_SIMPLEX, 0.38, (200, 200, 200), 1, cv2.LINE_AA)
-                        lbg_str = f"{log_bg_val:.4f}" if np.isfinite(log_bg_val) else "--"
-                        cv2.putText(shown, lbg_str, (hud_x + 140, curr_y), cv2.FONT_HERSHEY_SIMPLEX, 0.38, (255, 200, 120), 1, cv2.LINE_AA)
-                    else:
-                        cv2.circle(shown, (hud_x + 14, curr_y - 4), 4, (200, 120, 255), -1)
-                        cv2.putText(shown, f"{m_key[:12]}:", (hud_x + 24, curr_y), cv2.FONT_HERSHEY_SIMPLEX, 0.38, (200, 200, 200), 1, cv2.LINE_AA)
-                        cv2.putText(shown, "Active", (hud_x + 140, curr_y), cv2.FONT_HERSHEY_SIMPLEX, 0.38, (220, 160, 255), 1, cv2.LINE_AA)
-                    curr_y += item_h
+                    items_data = []
+                    for m_key in hud_metrics:
+                        if m_key == 'R':
+                            items_data.append({
+                                'label': 'R (Red):',
+                                'value': f'{mean_r:.1f}',
+                                'bullet_color': (240, 60, 60),
+                                'val_color': (255, 100, 100)
+                            })
+                        elif m_key == 'G':
+                            items_data.append({
+                                'label': 'G (Green):',
+                                'value': f'{mean_g:.1f}',
+                                'bullet_color': (60, 220, 80),
+                                'val_color': (100, 255, 120)
+                            })
+                        elif m_key == 'B':
+                            items_data.append({
+                                'label': 'B (Blue):',
+                                'value': f'{mean_b:.1f}',
+                                'bullet_color': (60, 160, 240),
+                                'val_color': (100, 190, 255)
+                            })
+                        elif m_key == 'RGB_sum':
+                            items_data.append({
+                                'label': 'RGB Sum:',
+                                'value': f'{rgb_sum_val:.1f}',
+                                'bullet_color': (220, 220, 0),
+                                'val_color': (240, 240, 60)
+                            })
+                        elif m_key == 'RGB_sum_slope_30s':
+                            sl_str = f'{slope30_val:+.2f}/s' if np.isfinite(slope30_val) else '--'
+                            items_data.append({
+                                'label': 'Slope 30s:',
+                                'value': sl_str,
+                                'bullet_color': (120, 240, 140),
+                                'val_color': (120, 255, 140)
+                            })
+                        elif m_key == 'Transition_score':
+                            sc_str = f'{score_val:.2f}' if np.isfinite(score_val) else '--'
+                            items_data.append({
+                                'label': 'Transition:',
+                                'value': sc_str,
+                                'bullet_color': (80, 180, 255),
+                                'val_color': (80, 200, 255)
+                            })
+                        elif m_key == 'Log10(B/R)':
+                            lbr_str = f'{log_br_val:.4f}' if np.isfinite(log_br_val) else '--'
+                            items_data.append({
+                                'label': 'Log10(B/R):',
+                                'value': lbr_str,
+                                'bullet_color': (50, 170, 255),
+                                'val_color': (80, 190, 255)
+                            })
+                        elif m_key == 'Log10(B/G)':
+                            lbg_str = f'{log_bg_val:.4f}' if np.isfinite(log_bg_val) else '--'
+                            items_data.append({
+                                'label': 'Log10(B/G):',
+                                'value': lbg_str,
+                                'bullet_color': (255, 200, 100),
+                                'val_color': (255, 200, 120)
+                            })
+                        else:
+                            cg = next((c for c in config.get('custom_graphs', []) if c.get('name') == m_key), None)
+                            cg_val = np.nan
+                            custom_color = (200, 120, 255)
+                            if cg is not None:
+                                formula = cg.get('formula', '')
+                                hex_c = cg.get('color', '#C084FC')
+                                if hex_c and hex_c.startswith('#') and len(hex_c) == 7:
+                                    try:
+                                        custom_color = (int(hex_c[1:3], 16), int(hex_c[3:5], 16), int(hex_c[5:7], 16))
+                                    except Exception:
+                                        pass
+                                if formula:
+                                    try:
+                                        safe_builtins = {
+                                            'abs': abs, 'min': min, 'max': max, 'round': round, 'pow': pow,
+                                            'float': float, 'int': int, 'np': np, 'math': np,
+                                            'sin': np.sin, 'cos': np.cos, 'tan': np.tan,
+                                            'exp': np.exp, 'log': np.log, 'log10': np.log10, 'sqrt': np.sqrt
+                                        }
+                                        env = {
+                                            'R': float(mean_r),
+                                            'G': float(mean_g),
+                                            'B': float(mean_b),
+                                            'RGB': float(rgb_sum_val),
+                                            'RGB_sum': float(rgb_sum_val),
+                                            'Slope': float(slope30_val) if np.isfinite(slope30_val) else 0.0,
+                                            'Slope30': float(slope30_val) if np.isfinite(slope30_val) else 0.0,
+                                            'Transition': float(score_val) if np.isfinite(score_val) else 0.0,
+                                            'Score': float(score_val) if np.isfinite(score_val) else 0.0,
+                                            'LogBR': float(log_br_val) if np.isfinite(log_br_val) else 0.0,
+                                            'LogBG': float(log_bg_val) if np.isfinite(log_bg_val) else 0.0,
+                                        }
+                                        for cv in config.get('custom_variables', []):
+                                            cv_name = cv.get('name', '').strip()
+                                            cv_formula = cv.get('formula', '').strip()
+                                            if cv_name and cv_formula:
+                                                try:
+                                                    env[cv_name] = float(eval(cv_formula, {'__builtins__': safe_builtins}, env))
+                                                except Exception:
+                                                    env[cv_name] = 0.0
+                                        cg_val = float(eval(formula, {'__builtins__': safe_builtins}, env))
+                                    except Exception:
+                                        cg_val = np.nan
+
+                            if np.isfinite(cg_val):
+                                val_str = f"{cg_val:.4f}" if (abs(cg_val) < 0.1 and cg_val != 0) else f"{cg_val:.2f}"
+                            else:
+                                val_str = "--"
+
+                            items_data.append({
+                                'label': f"{m_key}:",
+                                'value': val_str,
+                                'bullet_color': custom_color,
+                                'val_color': custom_color
+                            })
+
+                    _render_sidebar_hud_pil(shown, hud_x, hud_y, hud_w, hud_h, time_str, items_data)
 
                 # 2. Всплывающее уведомление (Toast Notification)
                 active_toast_time = max(snap_toast_time, roi_drag.get('toast_time', 0))
                 active_toast_msg = roi_drag.get('toast_msg') if roi_drag.get('toast_time', 0) >= snap_toast_time else snap_toast_msg
                 if active_toast_time > time.time() and active_toast_msg:
-                    toast_w, toast_h = 420, 36
+                    toast_w, toast_h = 440, 36
                     toast_x, toast_y = (video_window_w - toast_w) // 2, video_window_h - 100
                     toast_ov = shown.copy()
                     cv2.rectangle(toast_ov, (toast_x, toast_y), (toast_x + toast_w, toast_y + toast_h), (20, 35, 25) if "OK" in active_toast_msg else (35, 20, 20), -1)
                     cv2.addWeighted(toast_ov, 0.9, shown, 0.1, 0, shown)
                     cv2.rectangle(shown, (toast_x, toast_y), (toast_x + toast_w, toast_y + toast_h), (0, 255, 120) if "OK" in active_toast_msg else (80, 80, 255), 1)
-                    cv2.putText(shown, active_toast_msg, (toast_x + 15, toast_y + 24), cv2.FONT_HERSHEY_SIMPLEX, 0.48, (255, 255, 255), 2, cv2.LINE_AA)
+
+                    t_sub = shown[toast_y:toast_y+toast_h, toast_x:toast_x+toast_w]
+                    if t_sub.size > 0 and t_sub.shape[0] == toast_h and t_sub.shape[1] == toast_w:
+                        pil_t = Image.fromarray(cv2.cvtColor(t_sub, cv2.COLOR_BGR2RGB))
+                        draw_t = ImageDraw.Draw(pil_t)
+                        f_t = _get_unicode_font(13, bold=True)
+                        draw_t.text((15, 8), active_toast_msg, font=f_t, fill=(255, 255, 255))
+                        shown[toast_y:toast_y+toast_h, toast_x:toast_x+toast_w] = cv2.cvtColor(np.array(pil_t), cv2.COLOR_RGB2BGR)
 
                 # 3. Нижняя панель в стиле YouTube (YouTube Scrub & Control Deck)
                 if is_file:

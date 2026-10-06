@@ -691,6 +691,11 @@ class LiveGraphWindow:
                             secs = t_sec % 60
                             time_str = f"{mins:02d}:{secs:04.1f} ({t_sec:.2f} с)"
 
+                            is_light = (getattr(self, 'theme_mode', 'dark') == 'light')
+                            y_col = '#B45309' if is_light else '#FBBF24'
+                            slope_col = '#047857' if is_light else '#85E889'
+                            score_col = '#B45309' if is_light else '#F59E0B'
+
                             extra_info = ""
                             if name == 'RGB' and hasattr(self, 'time_history') and len(self.time_history):
                                 th = np.array(self.time_history, dtype=float)
@@ -706,16 +711,16 @@ class LiveGraphWindow:
                                 if len(th):
                                     idx = max(0, min(len(self.slope30_history) - 1, np.searchsorted(th, x_val)))
                                     sv = float(self.slope30_history[idx])
-                                    extra_info = f" | <span style='color:#85E889;'>Наклон: {sv:+.3f}/s</span>"
+                                    extra_info = f" | <span style='color:{slope_col};'>Наклон: {sv:+.3f}/s</span>"
                             elif name == 'Transition_score' and hasattr(self, 'transition_score_history') and len(self.transition_score_history):
                                 th = np.array(self.time_history, dtype=float) if hasattr(self, 'time_history') else []
                                 if len(th):
                                     idx = max(0, min(len(self.transition_score_history) - 1, np.searchsorted(th, x_val)))
                                     sc = float(self.transition_score_history[idx])
-                                    extra_info = f" | <span style='color:#F59E0B;'>Индекс: {sc:.2f}</span>"
+                                    extra_info = f" | <span style='color:{score_col};'>Индекс: {sc:.2f}</span>"
 
                             self.cursor_hud_label.setText(
-                                f"📍 <b>{name}</b> ➔ ⏱ <b>X:</b> {time_str} | 📈 <b>Y:</b> <span style='color:#FBBF24;'>{y_val:+.4f}</span>{extra_info}"
+                                f"📍 <b>{name}</b> ➔ ⏱ <b>X:</b> {time_str} | 📈 <b>Y:</b> <span style='color:{y_col};'>{y_val:+.4f}</span>{extra_info}"
                             )
                     except Exception:
                         pass
@@ -948,6 +953,7 @@ class LiveGraphWindow:
 
     def _open_graph_selector(self):
         dlg = self.QtWidgets.QDialog(self.win)
+        dlg.setWindowFlags(dlg.windowFlags() & ~self.QtCore.Qt.WindowContextHelpButtonHint)
         dlg.setWindowTitle('Управление отображением графиков')
         dlg.resize(560, 620)
         lay = self.QtWidgets.QVBoxLayout(dlg)
@@ -1168,6 +1174,18 @@ class LiveGraphWindow:
                 QScrollBar::add-line:horizontal, QScrollBar::sub-line:horizontal {{ width: 0px; background: none; }}
                 QScrollBar::add-page:horizontal, QScrollBar::sub-page:horizontal {{ background: none; }}
             """)
+
+            if hasattr(self, 'cursor_hud') and self.cursor_hud is not None:
+                hud_bg = '#F1F5F9' if light else 'rgba(17, 24, 39, 0.85)'
+                hud_border = '#CBD5E1' if light else '#2A3451'
+                hud_text_color = '#0284C7' if light else '#38BDF8'
+                self.cursor_hud.setStyleSheet(
+                    f"QFrame#cursorHud {{ background-color: {hud_bg}; border: 1px solid {hud_border}; border-radius: 6px; padding: 2px 10px; }}"
+                )
+                if hasattr(self, 'cursor_hud_label') and self.cursor_hud_label is not None:
+                    self.cursor_hud_label.setStyleSheet(
+                        f"font-family: 'Consolas', 'Segoe UI', monospace; font-size: 11px; font-weight: bold; color: {hud_text_color};"
+                    )
         except Exception:
             pass
 
@@ -2427,9 +2445,9 @@ class LiveGraphWindow:
 
         try:
             dialog = self.QtWidgets.QDialog(self.win)
+            dialog.setWindowFlags((dialog.windowFlags() | self.QtCore.Qt.WindowStaysOnTopHint) & ~self.QtCore.Qt.WindowContextHelpButtonHint)
             dialog.setWindowTitle("Добавить метку")
             dialog.setMinimumWidth(420)
-            dialog.setWindowFlag(self.QtCore.Qt.WindowStaysOnTopHint, True)
             dialog.setWindowModality(self.QtCore.Qt.ApplicationModal)
             self._active_annotation_dialog = dialog
 
@@ -2508,9 +2526,9 @@ class LiveGraphWindow:
             return
 
         dialog = self.QtWidgets.QDialog(self.win)
+        dialog.setWindowFlags((dialog.windowFlags() | self.QtCore.Qt.WindowStaysOnTopHint) & ~self.QtCore.Qt.WindowContextHelpButtonHint)
         dialog.setWindowTitle("📋 Список меток")
         dialog.setMinimumSize(500, 400)
-        dialog.setWindowFlag(self.QtCore.Qt.WindowStaysOnTopHint, True)
         dialog.setWindowModality(self.QtCore.Qt.ApplicationModal)
 
         layout = self.QtWidgets.QVBoxLayout()

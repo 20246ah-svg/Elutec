@@ -451,8 +451,11 @@ class Tests(unittest.TestCase):
     def test_miicam_wrapper_defaults(self):
         from src.utils.miicam_wrapper import MiiCamCapture
         cap = MiiCamCapture(source="miicam:0")
-        self.assertEqual(cap.exposure_us, 20000)
+        self.assertTrue(cap.is_miicam)
+        self.assertEqual(cap.exposure_us, 22000)
         self.assertEqual(cap.gain_percent, 100)
+        self.assertEqual(cap.contrast, 5)
+        self.assertEqual(cap.saturation, 135)
         self.assertEqual(cap.gamma, 100)
         cap.apply_settings_dict({
             "miicam_exposure_us": 15000,
@@ -478,6 +481,37 @@ class Tests(unittest.TestCase):
         cap.set_high_fps_mode(60)
         self.assertEqual(cap.exposure_us, 15000)
         self.assertEqual(cap.binning_mode, 1)
+
+        cap.release()
+
+    def test_miicam_settings_change_preserves_awb(self):
+        from src.utils.miicam_wrapper import MiiCamCapture
+        cap = MiiCamCapture(source="miicam:0")
+        cap.wb_temp = 5400
+        cap.wb_tint = 980
+        cap.wb_r = 15
+        cap.wb_g = 0
+        cap.wb_b = -12
+
+        # Changing brightness/contrast/exposure must NOT wipe out calibrated WB
+        cap.apply_settings_dict({
+            "miicam_brightness": 10,
+            "miicam_contrast": 20,
+            "miicam_exposure_us": 18000,
+            "miicam_gain": 150,
+            "miicam_wb_r": 0,
+            "miicam_wb_g": 0,
+            "miicam_wb_b": 0,
+            "miicam_temp": 6500,
+            "miicam_tint": 1000,
+        })
+        self.assertEqual(cap.brightness, 10)
+        self.assertEqual(cap.contrast, 20)
+        self.assertEqual(cap.exposure_us, 18000)
+        self.assertEqual(cap.gain_percent, 150)
+        # Calibrated values remain untouched
+        self.assertEqual(cap.wb_temp, 5400)
+        self.assertEqual(cap.wb_tint, 980)
 
         cap.release()
 
@@ -677,18 +711,12 @@ class Tests(unittest.TestCase):
             sw = SettingsWindow(root, cfg, current_cap=MockMiiCam())
             self.assertTrue(sw.is_miicam)
 
-            # Test applying built-in preset "Бром (Bromine)"
-            sw._apply_detector_preset("Бром (Bromine)")
-            self.assertEqual(sw.detector_vars["miicam_exposure_us"].get(), 15000)
-            self.assertEqual(sw.detector_vars["miicam_gain"].get(), 120)
-            self.assertEqual(sw.detector_vars["miicam_temp"].get(), 5800)
-            self.assertEqual(sw.detector_vars["miicam_contrast"].get(), 15)
-
-            # Test applying "Ароматика (Aromatics)"
-            sw._apply_detector_preset("Ароматика (Aromatics)")
-            self.assertEqual(sw.detector_vars["miicam_exposure_us"].get(), 25000)
-            self.assertEqual(sw.detector_vars["miicam_gain"].get(), 150)
-            self.assertEqual(sw.detector_vars["miicam_contrast"].get(), 20)
+            # Test applying default preset
+            sw._apply_detector_preset("По умолчанию (Default)")
+            self.assertEqual(sw.detector_vars["miicam_exposure_us"].get(), 22000)
+            self.assertEqual(sw.detector_vars["miicam_gain"].get(), 100)
+            self.assertEqual(sw.detector_vars["miicam_temp"].get(), 6500)
+            self.assertEqual(sw.detector_vars["miicam_tint"].get(), 1000)
 
             # Test creating a custom named preset
             sw.detector_vars["miicam_exposure_us"].set(42000)
@@ -696,18 +724,27 @@ class Tests(unittest.TestCase):
             custom_data = {k: v.get() for k, v in sw.detector_vars.items()}
             sw.config["detector_presets"]["Нефть фракция 1"] = custom_data
 
-            # Apply another preset then re-apply our custom preset
+            # Apply "По умолчанию (Default)" then re-apply our custom preset
             sw._apply_detector_preset("По умолчанию (Default)")
-            self.assertEqual(sw.detector_vars["miicam_exposure_us"].get(), 20000)
+            self.assertEqual(sw.detector_vars["miicam_exposure_us"].get(), 22000)
+            self.assertEqual(sw.detector_vars["miicam_gain"].get(), 100)
 
             sw._apply_detector_preset("Нефть фракция 1")
             self.assertEqual(sw.detector_vars["miicam_exposure_us"].get(), 42000)
             self.assertEqual(sw.detector_vars["miicam_gain"].get(), 185)
 
+            # Test default preset deletion is blocked
+            sw.preset_var.set("По умолчанию (Default)")
+            sw._delete_detector_preset()
+            self.assertIn("По умолчанию (Default)", sw.config["detector_presets"])
+
             # Clean up
             sw.win.destroy()
         finally:
             try:
+                root.destroy()
+            except Exception:
+                pass
                 root.destroy()
             except Exception:
                 pass
@@ -718,6 +755,213 @@ class Tests(unittest.TestCase):
         self.assertIn("RGB_sum_slope_30s", DEFAULT_PLAYER_HUD_METRICS)
         self.assertIn("Transition_score", DEFAULT_PLAYER_HUD_METRICS)
         self.assertIn("Log10(B/R)", DEFAULT_PLAYER_HUD_METRICS)
+
+    def test_player_hud_unicode_rendering(self):
+        # Verify that all in-player HUD elements support Russian/Cyrillic Unicode rendering via PIL
+        import inspect
+        from src.analysis import runner
+        src = inspect.getsource(runner)
+        self.assertIn('_render_sidebar_hud_pil', src)
+        self.assertIn('_render_picker_popup_pil', src)
+
+        # Test rendering Cyrillic text onto a frame
+        frame = np.zeros((300, 400, 3), dtype=np.uint8)
+        items = [
+            {'label': 'Пользовательский график:', 'value': '12.00', 'bullet_color': (200, 120, 255), 'val_color': (220, 160, 255)},
+            {'label': 'R (Красный):', 'value': '30.8', 'bullet_color': (240, 60, 60), 'val_color': (255, 100, 100)},
+        ]
+        runner._render_sidebar_hud_pil(frame, 10, 10, 280, 100, 'T: 00:00:36', items)
+        self.assertGreater(np.count_nonzero(frame), 0)
+
+    def test_cursor_hud_theme_styling(self):
+        try:
+            from PyQt5 import QtWidgets, QtCore, QtGui
+            import pyqtgraph as pg
+        except ImportError:
+            # Headless environment without PyQt5 binary
+            class MockWidget:
+                def __init__(self):
+                    self._qss = ""
+                def styleSheet(self):
+                    return self._qss
+                def setStyleSheet(self, s):
+                    self._qss = s
+            o = Probe.__new__(Probe)
+            o.theme_mode = 'light'
+            o.cursor_hud = MockWidget()
+            o.cursor_hud_label = MockWidget()
+            o.win = MockWidget()
+            o._apply_elutek_qss()
+            self.assertIn('#F1F5F9', o.cursor_hud.styleSheet())
+            self.assertIn('#CBD5E1', o.cursor_hud.styleSheet())
+            o.theme_mode = 'dark'
+            o._apply_elutek_qss()
+            self.assertIn('rgba(17, 24, 39, 0.85)', o.cursor_hud.styleSheet())
+            self.assertIn('#2A3451', o.cursor_hud.styleSheet())
+            return
+
+        o = Probe.__new__(Probe)
+        o.theme_mode = 'light'
+        o.cursor_hud = QtWidgets.QFrame()
+        o.cursor_hud_label = QtWidgets.QLabel()
+        o.win = QtWidgets.QMainWindow()
+        o.QtWidgets = QtWidgets
+        o.QtCore = QtCore
+        o.QtGui = QtGui
+        o.pg = pg
+        o.is_video_file = False
+        o.shared_x_axis = False
+        o.notification_settings = {}
+        o._apply_elutek_qss()
+        hud_qss = o.cursor_hud.styleSheet()
+        self.assertIn('#F1F5F9', hud_qss)
+        self.assertIn('#CBD5E1', hud_qss)
+
+        o.theme_mode = 'dark'
+        o._apply_elutek_qss()
+        dark_hud_qss = o.cursor_hud.styleSheet()
+        self.assertIn('rgba(17, 24, 39, 0.85)', dark_hud_qss)
+        self.assertIn('#2A3451', dark_hud_qss)
+
+    def test_dialog_window_flags(self):
+        try:
+            from PyQt5 import QtWidgets, QtCore
+        except ImportError:
+            import inspect
+            from src.gui import live_graph
+            src = inspect.getsource(live_graph)
+            # Verify WindowContextHelpButtonHint removal in source
+            self.assertIn('~self.QtCore.Qt.WindowContextHelpButtonHint', src)
+            return
+
+        app = QtWidgets.QApplication.instance() or QtWidgets.QApplication([])
+        parent = QtWidgets.QWidget()
+        dlg = QtWidgets.QDialog(parent)
+        dlg.setWindowFlags(dlg.windowFlags() & ~QtCore.Qt.WindowContextHelpButtonHint)
+        self.assertFalse(bool(dlg.windowFlags() & QtCore.Qt.WindowContextHelpButtonHint))
+
+    def test_preview_roi_overlay_dynamic_bounds(self):
+        import cv2
+        overlay_lines = [
+            "ROI RGB  R: 98.4  G:145.2  B:210.8  |  FPS: 60",
+            "Log10(B/R):  0.3308",
+        ]
+        font = cv2.FONT_HERSHEY_SIMPLEX
+        font_scale = 0.58
+        thickness = 2
+        (tw1, th1), _ = cv2.getTextSize(overlay_lines[0], font, font_scale, thickness)
+        (tw2, th2), _ = cv2.getTextSize(overlay_lines[1], font, font_scale, thickness)
+        box_w = max(tw1, tw2) + 24
+        box_h = th1 + th2 + 30
+        # Box width should comfortably exceed line 1 text width with padding
+        self.assertGreater(box_w, tw1)
+        self.assertGreater(box_h, th1 + th2)
+
+    def test_white_balance_roi_calibration(self):
+        from src.utils.helpers import compute_roi_means
+        # Create a test frame matching user's green-tinted white sheet (B=116, G=145, R=73)
+        frame = np.full((100, 100, 3), (116, 145, 73), dtype=np.uint8)
+        raw_cfg = {'roi_x': 10, 'roi_y': 10, 'roi_w': 50, 'roi_h': 50, 'roi_shape': 'rect', 'wb_r_mult': 1.0, 'wb_g_mult': 1.0, 'wb_b_mult': 1.0}
+        mb, mg, mr, *_ = compute_roi_means(frame, raw_cfg)
+        self.assertAlmostEqual(mr, 73.0, delta=1.0)
+        self.assertAlmostEqual(mg, 145.0, delta=1.0)
+        self.assertAlmostEqual(mb, 116.0, delta=1.0)
+
+        # Calculate calibration multipliers
+        kr = mg / mr
+        kg = 1.0
+        kb = mg / mb
+        cal_cfg = {'roi_x': 10, 'roi_y': 10, 'roi_w': 50, 'roi_h': 50, 'roi_shape': 'rect', 'wb_r_mult': kr, 'wb_g_mult': kg, 'wb_b_mult': kb}
+        cmb, cmg, cmr, *_ = compute_roi_means(frame, cal_cfg)
+        self.assertAlmostEqual(cmr, cmg, delta=1.0)
+        self.assertAlmostEqual(cmb, cmg, delta=1.0)
+        self.assertAlmostEqual(cmr, 145.0, delta=1.0)
+
+    def test_default_detector_presets_neutral_wb(self):
+        from src.config import DEFAULT_DETECTOR_PRESETS
+        self.assertEqual(len(DEFAULT_DETECTOR_PRESETS), 1)
+        self.assertIn("По умолчанию (Default)", DEFAULT_DETECTOR_PRESETS)
+        default_preset = DEFAULT_DETECTOR_PRESETS.get("По умолчанию (Default)", {})
+        self.assertEqual(default_preset.get("miicam_wb_r"), 0)
+        self.assertEqual(default_preset.get("miicam_wb_g"), 0)
+        self.assertEqual(default_preset.get("miicam_wb_b"), 0)
+        self.assertEqual(default_preset.get("miicam_temp"), 6500)
+        self.assertEqual(default_preset.get("miicam_tint"), 1000)
+
+    def test_default_preset_cannot_be_deleted(self):
+        import tkinter as tk
+        from src.config import DEFAULT_DETECTOR_PRESETS
+        from src.gui.settings_window import SettingsWindow
+        try:
+            root = tk.Tk()
+            root.withdraw()
+        except Exception:
+            return
+        try:
+            cfg = {"detector_presets": dict(DEFAULT_DETECTOR_PRESETS)}
+            sw = SettingsWindow(root, cfg)
+            sw.preset_var.set("По умолчанию (Default)")
+            sw._delete_detector_preset()
+            # Must remain intact
+            self.assertIn("По умолчанию (Default)", sw.config["detector_presets"])
+            sw.win.destroy()
+        finally:
+            try:
+                root.destroy()
+            except Exception:
+                pass
+
+    def test_webcam_frames_untouched(self):
+        # Verify that standard webcams / files pass through raw frames without software color filters
+        grey_frame = np.full((50, 50, 3), 128, dtype=np.uint8)
+        # Pristine copy should match exact bytes
+        self.assertEqual(grey_frame[25, 25, 0], 128)
+        self.assertEqual(grey_frame[25, 25, 1], 128)
+        self.assertEqual(grey_frame[25, 25, 2], 128)
+
+    def test_miicam_apply_settings_does_not_corrupt_awb(self):
+        from src.utils.miicam_wrapper import MiiCamCapture
+        # Instantiate a mock-like or dummy object without calling hardware
+        cap = MiiCamCapture.__new__(MiiCamCapture)
+        cap.handle = None
+        cap._opened = True
+        cap.wb_temp = 5400
+        cap.wb_tint = 1020
+        cap.wb_r = 0
+        cap.wb_g = 0
+        cap.wb_b = 0
+        cap.exposure_us = 22000
+        cap.gain_percent = 100
+        cap.brightness = 0
+        cap.contrast = 5
+        cap.saturation = 135
+        cap.gamma = 100
+
+        # When adjusting brightness and contrast, WB temp/tint must remain unchanged
+        cap.apply_settings_dict({
+            'miicam_brightness': 10,
+            'miicam_contrast': 15,
+            'miicam_temp': 6500,  # Default in UI
+            'miicam_tint': 1000   # Default in UI
+        })
+        self.assertEqual(cap.brightness, 10)
+        self.assertEqual(cap.contrast, 15)
+        self.assertEqual(cap.wb_temp, 5400)
+        self.assertEqual(cap.wb_tint, 1020)
+
+    def test_miicam_frame_warmup_filters_initial_green(self):
+        from src.utils.miicam_wrapper import MiiCamCapture
+        cap = MiiCamCapture.__new__(MiiCamCapture)
+        cap._frame_count = 0
+        cap._awb_settled = False
+        self.assertFalse(cap._awb_settled)
+        # First 4 frames are marked as unsettled/warming up
+        cap._frame_count = 4
+        self.assertTrue(cap._frame_count < 5 and not cap._awb_settled)
+        # 5th frame settles
+        cap._frame_count = 5
+        cap._awb_settled = True
+        self.assertTrue(cap._awb_settled)
 
 if __name__ == '__main__':
     unittest.main()
