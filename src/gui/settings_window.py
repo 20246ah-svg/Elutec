@@ -26,6 +26,7 @@ from ..config import (
     DEFAULT_DETECTOR_PRESETS, DEFAULT_AUTO_MARK_COOLDOWN_SEC, DEFAULT_PLAYER_HUD_METRICS
 )
 from ..utils.helpers import is_miicam_source
+from ..data.project_store import ProjectStore
 from .theme import get_palette
 
 APP_SETTINGS_FILE = "config.json"
@@ -168,11 +169,15 @@ def save_settings(data):
 
 
 class SettingsWindow:
-    def __init__(self, parent, config, on_apply=None, current_cap=None):
+    def __init__(self, parent, config, on_apply=None, current_cap=None, project_store=None):
         self.parent = parent
         self.config = config
         self.on_apply = on_apply
         self.current_cap = current_cap
+        self.project_store = project_store or ProjectStore()
+        # Preserve the old in-memory API for external callers/tests; the main
+        # application always passes ProjectStore and uses the isolated libraries.
+        self._legacy_preset_compat = project_store is None
 
         # Determine whether MiiCam (RGB detector) is physically connected and active
         self.is_miicam = (
@@ -738,37 +743,35 @@ class SettingsWindow:
 
         ttk.Label(p_row, text="Пресет сенсора:", font=("Segoe UI", 9, "bold")).pack(side="left", padx=(0, 6))
 
-        # Очистка устаревших встроенных пресетов: оставляем только "По умолчанию (Default)" и созданные пользователем
-        obsolete_presets = {
-            "Хроматографический спектр (ChromatoBoost)",
-            "Стандартный sRGB (sRGB Standard D65)",
-            "Бром (Bromine)",
-            "Ароматика (Aromatics)",
-            "Насыщенные углеводороды (Saturates)",
-            "Турбо 120 FPS (Низкая выдержка)",
-            "Бром",
-            "Ароматика",
-            "Насыщенные углеводороды",
-            "Турбо 120 FPS",
-        }
-        if "detector_presets" not in self.config or not isinstance(self.config.get("detector_presets"), dict):
-            self.config["detector_presets"] = dict(DEFAULT_DETECTOR_PRESETS)
-        else:
-            for obs in obsolete_presets:
-                self.config["detector_presets"].pop(obs, None)
-            if "По умолчанию (Default)" not in self.config["detector_presets"]:
-                self.config["detector_presets"]["По умолчанию (Default)"] = dict(DEFAULT_DETECTOR_PRESETS["По умолчанию (Default)"])
-
-        preset_names = list(self.config["detector_presets"].keys())
-        self.preset_var = tk.StringVar(value=preset_names[0] if preset_names else "По умолчанию (Default)")
+        self.preset_var = tk.StringVar(value="")
         self.cb_detector_presets = ttk.Combobox(
-            p_row, textvariable=self.preset_var, values=preset_names, state="readonly", width=32
+            p_row, textvariable=self.preset_var, values=(), state="readonly", width=31
         )
-        self.cb_detector_presets.pack(side="left", padx=(0, 8))
+        self.cb_detector_presets.pack(side="left", padx=(0, 6))
+
+        self.preset_scope_var = tk.StringVar(value="project" if self.project_store.root else "user")
+        scope_options = [("Мои пресеты", "user")]
+        if self.project_store.root:
+            scope_options.insert(0, ("Проект", "project"))
+        self._preset_scope_labels = {label: scope for label, scope in scope_options}
+        self._preset_scope_values = {scope: label for label, scope in scope_options}
+        self.preset_scope_label_var = tk.StringVar(value=self._preset_scope_values[self.preset_scope_var.get()])
+        ttk.Combobox(
+            p_row, textvariable=self.preset_scope_label_var,
+            values=[label for label, _ in scope_options], state="readonly", width=13
+        ).pack(side="left", padx=(0, 5))
+        self.preset_scope_label_var.trace_add("write", self._on_preset_scope_changed)
 
         ttk.Button(p_row, text="⚡ Применить", command=self._apply_detector_preset).pack(side="left", padx=2)
-        ttk.Button(p_row, text="💾 Сохранить как...", command=self._save_detector_preset).pack(side="left", padx=2)
-        ttk.Button(p_row, text="🗑️ Удалить", command=self._delete_detector_preset).pack(side="left", padx=2)
+        ttk.Button(p_row, text="💾 Сохранить копию…", command=self._save_detector_preset).pack(side="left", padx=2)
+        ttk.Button(p_row, text="По умолчанию", command=self._set_detector_preset_default).pack(side="left", padx=2)
+        ttk.Button(p_row, text="🗑️", command=self._delete_detector_preset, width=3).pack(side="left", padx=2)
+        active_preset_id = self.config.get("active_detector_preset_id")
+        has_active_preset = bool(active_preset_id and self.project_store.get_preset(active_preset_id, "detector"))
+        preferred_preset_id = active_preset_id if has_active_preset else self.project_store.get_default_preset_id("detector")
+        self._applied_detector_preset_id = active_preset_id if has_active_preset else None
+        self._pending_default_preset_id = None
+        self._refresh_detector_presets(preferred_preset_id)
 
         # 2. Sub-Notebook for MiiCam (Color, Expo, WB, Control, Flip)
         nb_det = ttk.Notebook(tab_detector)
@@ -1173,13 +1176,74 @@ class SettingsWindow:
                 self.binning_combo_var.set("1: Полное разрешение 1x1")
         self._on_detector_param_changed()
 
-    def _apply_detector_preset(self, preset_name=None):
+    def _on_preset_scope_changed(self, *args):
+        label = self.preset_scope_label_var.get()
+        if label in getattr(self, "_preset_scope_labels", {}):
+            self.preset_scope_var.set(self._preset_scope_labels[label])
+
+    def _refresh_detector_presets(self, preferred_id=None):
+        records = list(self.project_store.list_presets("detector"))
+        # Old integrations may still mutate config["detector_presets"] directly.
+        # Read these values for compatibility, but never persist them from the
+        # application-managed ProjectStore path.
+        if self._legacy_preset_compat:
+            legacy = self.config.get("detector_presets", {})
+            if isinstance(legacy, dict):
+                known_builtin_names = {r.get("name", "").casefold() for r in records if r.get("locked")}
+                for name, settings in legacy.items():
+                    if (isinstance(settings, dict) and str(name).casefold() not in known_builtin_names
+                            and not any(r.get("name", "").casefold() == str(name).casefold() for r in records)):
+                        records.append({
+                            "id": f"legacy:detector:{name}", "kind": "detector", "name": str(name),
+                            "origin": "user", "locked": False, "settings": settings,
+                        })
+
+        labels = []
+        mapping = {}
+        selected = None
+        for record in records:
+            origin = record.get("origin", "user")
+            label = record.get("name", "Пресет")
+            if origin == "project":
+                label += " · проект"
+            elif origin == "user":
+                label += " · личный"
+            if label in mapping:
+                label += f" · {str(record.get('id', ''))[-6:]}"
+            labels.append(label)
+            mapping[label] = record
+            if record.get("id") == preferred_id:
+                selected = label
+        self._detector_preset_records = records
+        self._detector_preset_by_label = mapping
+        self.cb_detector_presets.configure(values=labels)
+        if selected is None and labels:
+            selected = labels[0]
+        self.preset_var.set(selected or "")
+
+    def _selected_detector_preset(self, preset_name=None):
+        value = preset_name or (self.preset_var.get() if hasattr(self, "preset_var") else "")
+        record = getattr(self, "_detector_preset_by_label", {}).get(value)
+        if record:
+            return record
+        for item in getattr(self, "_detector_preset_records", []):
+            if item.get("name") == value or item.get("id") == value:
+                return item
+        return None
+
+    def _apply_detector_preset(self, preset_name=None, show_message=True):
         name = preset_name or (self.preset_var.get() if hasattr(self, 'preset_var') else None)
-        presets = self.config.get("detector_presets", DEFAULT_DETECTOR_PRESETS)
-        if not name or name not in presets:
+        record = self._selected_detector_preset(name)
+        if record is None and self._legacy_preset_compat:
+            old_settings = self.config.get("detector_presets", {})
+            if isinstance(old_settings, dict) and name in old_settings:
+                record = {"id": f"legacy:detector:{name}", "name": name,
+                          "locked": str(name).casefold() == "по умолчанию (default)".casefold(),
+                          "settings": old_settings[name]}
+        if not record:
             messagebox.showwarning("Пресеты", f"Пресет «{name}» не найден.", parent=self.win)
             return
-        p_data = presets[name]
+        p_data = record.get("settings", {})
         for k, v in p_data.items():
             if k in getattr(self, 'detector_vars', {}):
                 try:
@@ -1204,11 +1268,16 @@ class SettingsWindow:
             s_val = self.detector_vars['miicam_speed'].get()
             self.speed_combo_var.set("2: Максимальная (High / 60-120 FPS)" if s_val == 2 else "1: Средняя" if s_val == 1 else "0: Низкая")
 
+        if record.get("id") and not str(record["id"]).startswith("legacy:"):
+            self._applied_detector_preset_id = record["id"]
         self._on_detector_param_changed()
-        messagebox.showinfo("Пресеты", f"Пресет «{name}» успешно применен!", parent=self.win)
+        if show_message:
+            messagebox.showinfo("Пресеты", f"Пресет «{record.get('name', name)}» успешно применен!", parent=self.win)
 
     def _save_detector_preset(self):
-        name = simpledialog.askstring("Сохранить пресет", "Введите название пресета (например: Бром, Ароматика, Нефть):", parent=self.win)
+        name = simpledialog.askstring(
+            "Сохранить пресет", "Введите название копии пресета:", parent=self.win
+        )
         if not name or not name.strip():
             return
         name = name.strip()
@@ -1218,39 +1287,68 @@ class SettingsWindow:
                 p_data[k] = var.get()
             except Exception:
                 pass
-        if "detector_presets" not in self.config or not isinstance(self.config["detector_presets"], dict):
-            self.config["detector_presets"] = dict(DEFAULT_DETECTOR_PRESETS)
-        self.config["detector_presets"][name] = p_data
-        preset_names = list(self.config["detector_presets"].keys())
-        if hasattr(self, 'cb_detector_presets'):
-            self.cb_detector_presets.config(values=preset_names)
-        if hasattr(self, 'preset_var'):
-            self.preset_var.set(name)
-        messagebox.showinfo("Пресеты", f"Пресет «{name}» успешно сохранен!", parent=self.win)
+        selected = self._selected_detector_preset()
+        scope = self.preset_scope_var.get()
+        try:
+            record = self.project_store.save_preset(
+                "detector", name, p_data, scope=scope,
+                based_on=selected.get("id") if selected else None,
+            )
+        except Exception as exc:
+            messagebox.showerror("Пресеты", str(exc), parent=self.win)
+            return
+        self._applied_detector_preset_id = record["id"]
+        self._refresh_detector_presets(record["id"])
+        messagebox.showinfo(
+            "Пресеты", f"Копия «{name}» сохранена ({'проект' if scope == 'project' else 'личная библиотека'}).",
+            parent=self.win,
+        )
+
+    def _set_detector_preset_default(self):
+        record = self._selected_detector_preset()
+        if not record:
+            return
+        self._pending_default_preset_id = record["id"]
+        if self._applied_detector_preset_id != record["id"]:
+            self._apply_detector_preset(record["id"], show_message=False)
+        messagebox.showinfo(
+            "Пресеты", f"«{record['name']}» будет пресетом по умолчанию после нажатия «Сохранить и применить».",
+            parent=self.win,
+        )
 
     def _delete_detector_preset(self):
         name = self.preset_var.get() if hasattr(self, 'preset_var') else None
-        presets = self.config.get("detector_presets", {})
-        if not name or name not in presets:
+        record = self._selected_detector_preset(name)
+        if not record and self._legacy_preset_compat:
+            legacy = self.config.get("detector_presets", {})
+            if isinstance(legacy, dict) and name in legacy:
+                record = {"id": f"legacy:detector:{name}", "name": name,
+                          "locked": name == "По умолчанию (Default)"}
+        if not name or not record:
             return
-        if name in ("По умолчанию (Default)", "По умолчанию", "Default"):
+        if record.get("locked") or str(record.get("id", "")).startswith("builtin:"):
             messagebox.showwarning(
-                "Защита пресета",
-                "Пресет «По умолчанию (Default)» защищен от удаления и является базовым эталоном.",
+                "Защита пресета", "Встроенный пресет защищен от изменения и удаления. Сохраните его копию под другим именем.",
                 parent=self.win
             )
             return
-        if messagebox.askyesno("Удаление пресета", f"Вы уверены, что хотите удалить пресет «{name}»?", parent=self.win):
-            del self.config["detector_presets"][name]
-            preset_names = list(self.config["detector_presets"].keys())
-            if not preset_names:
-                self.config["detector_presets"] = dict(DEFAULT_DETECTOR_PRESETS)
-                preset_names = list(self.config["detector_presets"].keys())
-            if hasattr(self, 'cb_detector_presets'):
-                self.cb_detector_presets.config(values=preset_names)
-            if hasattr(self, 'preset_var'):
-                self.preset_var.set(preset_names[0])
-            messagebox.showinfo("Пресеты", f"Пресет «{name}» удален.", parent=self.win)
+        if not messagebox.askyesno("Удаление пресета", f"Удалить пресет «{record.get('name', name)}»?", parent=self.win):
+            return
+        try:
+            if str(record.get("id", "")).startswith("legacy:") and self._legacy_preset_compat:
+                self.config.get("detector_presets", {}).pop(record.get("name"), None)
+            else:
+                self.project_store.delete_preset(record["id"])
+        except Exception as exc:
+            messagebox.showerror("Пресеты", str(exc), parent=self.win)
+            return
+        default_id = self.project_store.get_default_preset_id("detector")
+        if record.get("id") == self._applied_detector_preset_id:
+            self._applied_detector_preset_id = default_id
+        if record.get("id") == self._pending_default_preset_id:
+            self._pending_default_preset_id = None
+        self._refresh_detector_presets(default_id)
+        messagebox.showinfo("Пресеты", f"Пресет «{record.get('name', name)}» удален.", parent=self.win)
 
     def _capture_new_baseline(self):
         """Зафиксировать чистый эталонный кадр (Raw Baseline) для левой половины сравнения."""
@@ -2279,10 +2377,19 @@ class SettingsWindow:
             "custom_variables": list(getattr(self, "_custom_variables", [])),
             "custom_graphs": list(getattr(self, "_custom_graphs", [])),
             "custom_auto_marks": list(getattr(self, "_custom_auto_marks", [])),
-            "detector_presets": dict(self.config.get("detector_presets", DEFAULT_DETECTOR_PRESETS)),
+            "active_detector_preset_id": (
+                self._applied_detector_preset_id or self.config.get("active_detector_preset_id")
+            ),
             "player_hud_metrics": list(self.config.get("player_hud_metrics", DEFAULT_PLAYER_HUD_METRICS)),
         }
         self.config.update(values)
+        if not self._legacy_preset_compat:
+            self.config.pop("detector_presets", None)
+        if self._pending_default_preset_id:
+            try:
+                self.project_store.set_default_preset("detector", self._pending_default_preset_id)
+            except Exception as e:
+                messagebox.showwarning("Пресеты", f"Не удалось назначить пресет по умолчанию:\n{e}", parent=self.win)
         try:
             save_settings(values)
         except Exception as e:

@@ -1,7 +1,7 @@
 import json
 import tkinter as tk
 from tkinter import ttk, messagebox, filedialog
-from .settings_window import SettingsWindow, load_saved_settings
+from .settings_window import SettingsWindow, load_saved_settings, save_settings
 import cv2
 import numpy as np
 import time
@@ -10,6 +10,7 @@ import socket
 import threading
 from PIL import Image, ImageTk, ImageDraw, ImageFont
 from collections import deque
+from pathlib import Path
 from ..utils.math_utils import compute_log_br
 
 from ..utils.helpers import (
@@ -28,6 +29,8 @@ from ..utils.license_manager import (
 )
 from .theme import get_palette
 from .license_dialog import LicenseDialog
+from .project_window import ProjectManagerDialog
+from ..data.project_store import ProjectStore
 
 
 def _get_unicode_font(size=14, bold=False):
@@ -196,6 +199,32 @@ class SetupApp:
             self.config.pop('show_triangle', None)
         except Exception:
             pass
+        for transient_key in ("session_id", "session_path", "exports_folder"):
+            self.config.pop(transient_key, None)
+
+        # Move mutable detector presets from the legacy config into the user's
+        # separate preset library. A changed old Default becomes a named copy;
+        # the packaged built-in remains canonical and locked.
+        legacy_presets_present = isinstance(self.config.get("detector_presets"), dict)
+        try:
+            migration_store = ProjectStore()
+            if migration_store.migrate_legacy_detector_presets(self.config):
+                save_settings(self.config)
+        except Exception as migration_error:
+            print(f"⚠️ Не удалось перенести старые пресеты детектора: {migration_error}")
+            if not legacy_presets_present:
+                self.config.pop("detector_presets", None)
+
+        self.project_store = None
+        saved_project_path = self.config.get("active_project_path")
+        if saved_project_path:
+            try:
+                self.project_store = ProjectStore.open_project(saved_project_path)
+                self.config["active_project_path"] = str(self.project_store.root)
+                self._load_project_default_detector(self.project_store)
+            except Exception as project_error:
+                print(f"⚠️ Последний проект недоступен: {project_error}")
+                self.project_store = None
 
         self.cap = None
         self.preview_worker = None
@@ -240,6 +269,7 @@ class SetupApp:
         # Final pass after widget creation: prevents first-launch ttk
         # defaults (white combobox/radiobutton states) from leaking through.
         self._apply_start_theme()
+        self._update_project_controls()
 
         self.update_preview()
         self.root.mainloop()
@@ -506,6 +536,10 @@ class SetupApp:
         ttk.Label(header_context, text='Визуальный контроль фракционирования',
                   style='Subtitle.TLabel').pack(anchor='w', pady=(2, 0))
 
+        self.project_btn = ttk.Button(
+            header, text='Выбрать проект', command=self.open_project_manager, style='Quiet.TButton'
+        )
+        self.project_btn.pack(side='right', padx=(7, 0))
         self.lic_btn = ttk.Button(header, text='Лицензия', command=self.open_license_dialog, style='Quiet.TButton')
         self.lic_btn.pack(side='right', padx=(7, 0))
         settings_btn = ttk.Button(header, text='Параметры', command=self.open_settings, style='Secondary.TButton')
@@ -680,13 +714,14 @@ class SetupApp:
         ttk.Separator(left, orient='horizontal').pack(fill='x', padx=12)
 
         # 03 — output destination; no duplicate explanation text.
-        frame_save = make_section(left, '03', 'РЕЗУЛЬТАТЫ', 'Сохранение сессии')
-        self.entry_save_folder = ttk.Entry(frame_save)
-        self.entry_save_folder.insert(0, self.config.get('save_folder', ''))
+        frame_save = make_section(left, '03', 'РЕЗУЛЬТАТЫ', 'Папка проекта')
+        self.session_path_var = tk.StringVar(master=self.root, value='Проект не выбран')
+        self.entry_save_folder = ttk.Entry(frame_save, textvariable=self.session_path_var, state='readonly')
         self.entry_save_folder.pack(fill='x', pady=(0, 6))
-        ttk.Button(frame_save, text='Выбрать папку…', command=self.choose_save_folder,
+        ttk.Button(frame_save, text='Выбрать / создать проект…', command=self.open_project_manager,
                    style='Quiet.TButton').pack(fill='x')
-        ttk.Label(frame_save, text='CSV  ·  графики  ·  видео', style='Eyebrow.TLabel').pack(anchor='w', pady=(7, 0))
+        ttk.Label(frame_save, text='Для каждого анализа создаётся отдельная сессия.',
+                  style='CardMuted.TLabel', wraplength=255).pack(anchor='w', pady=(7, 0))
 
         action_bar = ttk.Frame(left_outer, style='Control.TFrame', padding=(12, 10, 12, 11))
         action_bar.pack(fill='x')
@@ -870,19 +905,63 @@ class SetupApp:
         h = self.safe_get_int(self.var_h, self.MIN_ROI_SIZE)
         self.coord_label.config(text=f"ROI · X {x} / Y {y} / {w} × {h} px")
 
+    def _load_project_default_detector(self, store):
+        try:
+            preset_id = store.get_default_preset_id("detector")
+            preset = store.get_preset(preset_id, "detector")
+            if preset:
+                settings = preset.get("settings", {})
+                if isinstance(settings, dict):
+                    self.config.update(settings)
+                self.config["active_detector_preset_id"] = preset_id
+        except Exception as exc:
+            print(f"⚠️ Не удалось загрузить пресет проекта: {exc}")
+
+    def _update_project_controls(self, session_path=None):
+        store = getattr(self, "project_store", None)
+        if store and store.manifest:
+            name = str(store.manifest.get("name") or store.root.name)
+            short_name = name if len(name) <= 22 else name[:19] + "…"
+            button_text = f"Проект · {short_name}"
+            target = str(session_path or (store.root / "sessions"))
+        else:
+            button_text = "Выбрать проект"
+            target = "Проект не выбран"
+        if hasattr(self, "project_btn"):
+            try:
+                self.project_btn.configure(text=button_text)
+            except Exception:
+                pass
+        if hasattr(self, "session_path_var"):
+            self.session_path_var.set(target)
+
+    def open_project_manager(self):
+        ProjectManagerDialog(
+            self.root, on_open=self._set_active_project,
+            current_path=str(self.project_store.root) if self.project_store else None,
+            light_theme=bool(self.config.get("light_theme", False)),
+        )
+
+    def _set_active_project(self, store):
+        self.project_store = store
+        self.config["active_project_path"] = str(store.root)
+        self._load_project_default_detector(store)
+        self._update_project_controls()
+        self.apply_settings()
+
     def choose_save_folder(self):
-        folder = filedialog.askdirectory(title="Выберите папку для сохранения результатов")
-        if folder:
-            self.entry_save_folder.delete(0, tk.END)
-            self.entry_save_folder.insert(0, folder)
-            self.config['save_folder'] = folder
-            self.config['video_folder'] = folder
+        # Kept for compatibility with older callbacks; project sessions own the
+        # output path, so the supported action is to choose/change the project.
+        self.open_project_manager()
 
     def choose_video_folder(self):
-        self.choose_save_folder()
+        self.open_project_manager()
 
     def open_settings(self):
-        SettingsWindow(self.root, self.config, on_apply=self.apply_settings, current_cap=self.cap)
+        SettingsWindow(
+            self.root, self.config, on_apply=self.apply_settings,
+            current_cap=self.cap, project_store=self.project_store if self.project_store else ProjectStore(),
+        )
 
     def apply_settings(self):
         # Настройки применяются без перезапуска главного окна.
@@ -1922,6 +2001,12 @@ class SetupApp:
             pass
 
     def start_analysis(self):
+        # Анализы всегда принадлежат проекту: выбор открывает менеджер при первом запуске.
+        if not self.project_store:
+            self.open_project_manager()
+            if not self.project_store:
+                return
+
         # Проверка статуса лицензии и пробного периода
         status = self.lic_mgr.get_status()
         if not status.get("is_allowed", False):
@@ -1945,24 +2030,9 @@ class SetupApp:
         self.config['roi_w'] = max(self.MIN_ROI_SIZE, self.safe_get_int(self.var_w, self.MIN_ROI_SIZE))
         self.config['roi_h'] = max(self.MIN_ROI_SIZE, self.safe_get_int(self.var_h, self.MIN_ROI_SIZE))
         self.config['roi_shape'] = self.roi_shape_var.get()
-        self.config['save_folder'] = self.entry_save_folder.get().strip()
-        self.config['video_folder'] = self.config['save_folder']
-
         if not self.config['source']:
             messagebox.showerror("Ошибка", "Укажите источник видео (индекс или URL)")
             return
-        save_folder = self.config['save_folder']
-        if not save_folder or not os.path.isdir(save_folder):
-            messagebox.showerror(
-                "Ошибка",
-                "Папка для сохранения результатов не существует или недоступна.\n"
-                "Выберите папку через «Обзор...» (не используйте system32)."
-            )
-            return
-        if not os.access(save_folder, os.W_OK):
-            messagebox.showerror("Ошибка", f"Нет прав на запись в папку результатов:\n{save_folder}")
-            return
-
         # Never reuse the startup camera capture for a video-file analysis.
         # For video files, always close any preview capture and pass cap=None
         # so run_analysis opens a dedicated fresh capture from frame 0.
@@ -2006,16 +2076,102 @@ class SetupApp:
             cap = self.cap
             self.cap = None
 
+        try:
+            display_name = (
+                os.path.splitext(os.path.basename(self.config['source']))[0]
+                if source_is_file else "Анализ " + time.strftime("%Y-%m-%d %H-%M-%S")
+            )
+            session_info = self.project_store.create_session(
+                self.config, source=self.config['source'], display_name=display_name,
+                sample_id=str(self.config.get("sample_id", "")),
+            )
+        except Exception as session_error:
+            if cap is not None and hasattr(cap, 'release'):
+                try:
+                    cap.release()
+                except Exception:
+                    pass
+            messagebox.showerror("Сессия проекта", f"Не удалось создать папку сессии:\n{session_error}", parent=self.root)
+            if not source_is_file and self.config.get('source'):
+                source_to_restore = self.config['source']
+                self.root.after(650, lambda s=source_to_restore: self._restore_camera_after_analysis(s))
+            self.root.after(0, self.update_preview)
+            return
+
+        session_folder = session_info["path"]
+        output_config_keys = ("save_folder", "video_folder", "session_id", "session_path", "exports_folder")
+        previous_output_config = {
+            key: (key in self.config, self.config.get(key)) for key in output_config_keys
+        }
+        self.config["session_id"] = session_info["id"]
+        self.config["session_path"] = session_folder
+        self.config["exports_folder"] = os.path.join(session_folder, "exports")
+        self.config['save_folder'] = session_folder
+        self.config['video_folder'] = session_folder
+        self._update_project_controls(session_path=session_folder)
+
         self.is_running = False
         if not source_is_file:
             self.root.withdraw()
         res = None
+        analysis_exception = None
         try:
             res = run_analysis(self.config, parent=self.root, cap=cap)
         except Exception as e:
+            analysis_exception = str(e)
             print(f"❌ Ошибка при выполнении анализа: {e}")
             messagebox.showerror("Ошибка анализа", f"Произошла ошибка при анализе:\n{e}")
         finally:
+            if session_info:
+                artifacts = {
+                    "excel": (res or {}).get("excel_path") or (res or {}).get("session_excel_path"),
+                    "raw_csv": (res or {}).get("raw_csv_path"),
+                    "graph_png": (res or {}).get("graph_path"),
+                    "video": (res or {}).get("video_saved_path"),
+                }
+                fallback_artifacts = (
+                    ("excel", session_folder, "analysis_*.xlsx"),
+                    ("raw_csv", session_folder, "*_raw_rgb.csv"),
+                    ("graph_png", os.path.join(session_folder, "exports"), "*_graph.png"),
+                    ("video", session_folder, "*_video.mkv"),
+                )
+                for key, folder, pattern in fallback_artifacts:
+                    if not artifacts.get(key):
+                        try:
+                            matches = sorted(Path(folder).glob(pattern))
+                            artifacts[key] = str(matches[-1]) if matches else None
+                        except OSError:
+                            pass
+                records = len((res or {}).get("saved_data", []))
+                if analysis_exception or res is None:
+                    session_status = "failed"
+                    session_error = analysis_exception or "Анализ не вернул результат."
+                elif (res or {}).get("save_error"):
+                    session_status = "partial"
+                    session_error = (res or {}).get("save_error")
+                elif records or (res or {}).get("excel_path") or (res or {}).get("graph_path") or (res or {}).get("video_saved_path"):
+                    session_status = "completed"
+                    session_error = None
+                else:
+                    session_status = "empty"
+                    session_error = None
+                try:
+                    self.project_store.finish_session(
+                        session_folder, session_status, artifacts=artifacts, error=session_error,
+                        extra={
+                            "record_count": records,
+                            "duration_ms": ((res or {}).get("saved_data") or [[None]])[-1][0]
+                            if records else 0,
+                            "annotation_count": (res or {}).get("ann_count", 0),
+                        },
+                    )
+                except Exception as manifest_error:
+                    print(f"⚠️ Не удалось завершить манифест сессии: {manifest_error}")
+            for key, (was_present, old_value) in previous_output_config.items():
+                if was_present:
+                    self.config[key] = old_value
+                else:
+                    self.config.pop(key, None)
             self.is_running = True
             self.root.deiconify()
             self.root.lift()
@@ -2043,6 +2199,8 @@ class SetupApp:
                         lines.append(f"Excel: {res['excel_path']}")
                     if res.get('raw_csv_path'):
                         lines.append(f"Аварийный CSV RGB: {res['raw_csv_path']}")
+                    if res.get('graph_path'):
+                        lines.append(f"График PNG: {res['graph_path']}")
                     if res.get('video_saved_path'):
                         lines.append(f"Видео: {res['video_saved_path']}")
                     if res.get('ann_count'):

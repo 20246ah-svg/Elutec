@@ -10,7 +10,7 @@ from PIL import Image, ImageDraw, ImageFont
 from ..gui.live_graph import LiveGraphWindow
 from ..analysis.camera_worker import CameraWorker
 from ..analysis.video_recorder import AsyncVideoRecorder
-from ..data.excel_exporter import create_session_excel, save_to_excel, save_annotations_to_workbook
+from ..data.excel_exporter import create_session_excel, save_to_excel, save_annotations_to_workbook, save_graph_to_image
 from ..data.csv_logger import CsvLogger
 from ..utils.helpers import (
     create_video_capture, warmup_capture, read_valid_frame,
@@ -1567,6 +1567,7 @@ def run_analysis(config, parent=None, cap=None):
             saved_data = list(camera_worker.snapshot(copy_frame=False)['saved_data'])
         excel_path = None
         graph_path = None
+        graph_error = None
         annotations_path = None
         save_error = None
         ann_count = 0
@@ -1600,6 +1601,18 @@ def run_analysis(config, parent=None, cap=None):
                 save_error = f"Excel: {e}\n{traceback.format_exc()}"
                 print(f"❌ Ошибка сохранения Excel: {e}")
                 traceback.print_exc()
+
+            # PNG is a convenience export only; never let Matplotlib or a
+            # filesystem error prevent the analysis result from being returned.
+            try:
+                graph_folder = config.get("exports_folder") or os.path.join(save_folder, "exports")
+                os.makedirs(graph_folder, exist_ok=True)
+                source_excel = excel_path or session_excel_path
+                graph_base = os.path.splitext(os.path.basename(source_excel or "analysis"))[0]
+                graph_path = save_graph_to_image(graph_folder, saved_data, graph_base)
+            except Exception as e:
+                graph_error = str(e)
+                print(f"⚠️ Не удалось экспортировать PNG-график: {e}")
 
         if video_recorder is not None:
             try:
@@ -1642,6 +1655,9 @@ def run_analysis(config, parent=None, cap=None):
         return {
             'saved_data': saved_data,
             'excel_path': excel_path,
+            'session_excel_path': session_excel_path,
+            'graph_path': graph_path,
+            'graph_error': graph_error,
             'raw_csv_path': raw_csv_path,
             'video_saved_path': video_saved_path,
             'save_error': save_error,
