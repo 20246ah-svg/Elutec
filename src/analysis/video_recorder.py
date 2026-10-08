@@ -3,7 +3,6 @@ import numpy as np
 import subprocess
 import threading
 import queue
-import time
 import os
 from collections import deque
 

@@ -305,12 +305,3 @@ class LicenseManager:
         self._save(self._data)
         return True, f"Активация успешна! Лицензия: {lic_type}"
 
-    def reset_trial_for_testing(self):
-        """Сброс состояния для тестирования."""
-        now = time.time()
-        self._data["activated"] = False
-        self._data["license_key"] = ""
-        self._data["first_run_time"] = now
-        self._data["last_run_time"] = now
-        self._data["runs_count"] = 0
-        self._save(self._data)

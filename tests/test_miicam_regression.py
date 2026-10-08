@@ -7,7 +7,8 @@ def test_miicam_option_ids_match_bundled_sdk_header():
     wrapper = Path('src/utils/miicam_wrapper.py').read_text(encoding='utf-8')
     names = [
         'RAW', 'RGB', 'COLORMATIX', 'WBGAIN', 'BYTEORDER', 'BANDWIDTH',
-        'FRAME_DEQUE_LENGTH', 'ANTI_SHUTTER_EFFECT', 'AWB_CONTINUOUS', 'ISP'
+        'FRAME_DEQUE_LENGTH', 'ANTI_SHUTTER_EFFECT', 'AWB_CONTINUOUS', 'ISP',
+        'SHARPENING', 'CURVE', 'LINEAR', 'DEMOSAIC'
     ]
     for name in names:
         h = re.search(r'#define\s+MIICAM_OPTION_' + name + r'\s+(0x[0-9A-Fa-f]+)', header)

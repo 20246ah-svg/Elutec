@@ -28,7 +28,6 @@ MIICAM_FLAG_RAW10           = 0x00000200
 MIICAM_FLAG_RAW12           = 0x00000400
 MIICAM_FLAG_RAW14           = 0x00000800
 MIICAM_FLAG_RAW16           = 0x00001000
-MIICAM_FLAG_BINSKIP_SUPPORT = 0x00000020
 
 # Hardware / image-pipeline options. IMPORTANT: these values MUST match
 # the bundled miicam.h (SDK 60.31488.20260519). The previous wrapper used
@@ -37,7 +36,6 @@ MIICAM_FLAG_BINSKIP_SUPPORT = 0x00000020
 # colors.
 MIICAM_OPTION_NOFRAME_TIMEOUT        = 0x01
 MIICAM_OPTION_THREAD_PRIORITY        = 0x02
-MIICAM_OPTION_PROCESSMODE            = 0x03
 MIICAM_OPTION_RAW                    = 0x04
 MIICAM_OPTION_HISTOGRAM              = 0x05
 MIICAM_OPTION_BITDEPTH               = 0x06
@@ -58,6 +56,7 @@ MIICAM_OPTION_DEMOSAIC_STILL         = 0x14
 MIICAM_OPTION_BLACKLEVEL             = 0x15
 MIICAM_OPTION_MULTITHREAD            = 0x16
 MIICAM_OPTION_BINNING                = 0x17
+MIICAM_OPTION_SHARPENING             = 0x1E
 MIICAM_OPTION_BYTEORDER              = 0x2A
 MIICAM_OPTION_BANDWIDTH              = 0x2E
 MIICAM_OPTION_CALLBACK_THREAD        = 0x30
@@ -232,6 +231,24 @@ else:
     CALLBACK_TYPE = ctypes.CFUNCTYPE(None, ctypes.c_uint, ctypes.c_void_p)
 
 
+def mains_flicker_period_us(anti_flicker_mode):
+    """Период мерцания света от сети в мкс: 0 -> 60 Гц (120 Гц мерцание), 1 -> 50 Гц (100 Гц), 2 -> DC (нет)."""
+    return {0: 1_000_000.0 / 120.0, 1: 1_000_000.0 / 100.0}.get(int(anti_flicker_mode))
+
+
+def exposure_flicker_warning(exposure_us, anti_flicker_mode, tol_us=60.0):
+    """Текст предупреждения, если выдержка не кратна периоду мерцания света; иначе None."""
+    period = mains_flicker_period_us(anti_flicker_mode)
+    if not period or exposure_us <= 0:
+        return None
+    k = max(1, round(exposure_us / period))
+    nearest = k * period
+    if abs(exposure_us - nearest) <= tol_us:
+        return None
+    return (f"Выдержка {exposure_us} мкс не кратна периоду мерцания сети ({period:.0f} мкс): "
+            f"при питании света от сети возможны биения яркости. Ближайшее кратное: {nearest:.0f} мкс.")
+
+
 class MiiCamCapture:
     """
     High-performance OpenCV VideoCapture compatible wrapper for MiiCam cameras.
@@ -294,6 +311,8 @@ class MiiCamCapture:
         self.h_flip = False
         self.v_flip = False
         self.anti_flicker = 1   # 0: 60Hz, 1: 50Hz, 2: DC
+        self._isp_applied = {}  # option id -> last value sent (avoid re-sending on every slider move)
+        self._isp_report = {}   # label -> {'value', 'ok', 'readback'}
         self.fps = 30.0
         self._fps_count = 0
         self._fps_start = time.time()
@@ -1341,23 +1360,55 @@ class MiiCamCapture:
         self.thread_priority = int(priority)
         return self.put_option(MIICAM_OPTION_THREAD_PRIORITY, int(priority))
 
-    def set_high_fps_mode(self, target_fps=60):
-        """Fast preset for high-speed tracking (> 30 up to 120 FPS)."""
-        self.set_speed(2)
-        self.set_frame_preload(True)
-        self.set_thread_priority(2)
-        if target_fps >= 90:
-            self.set_exposure_time_us(8000)   # 8 ms -> up to 125 FPS
-            self.set_binning(2)
-        elif target_fps >= 60:
-            self.set_exposure_time_us(15000)  # 15 ms -> up to 66 FPS
-            self.set_binning(1)
-        else:
-            self.set_exposure_time_us(30000)  # 30 ms
-        return True
 
-    def get_realtime_fps(self):
-        return float(self.fps)
+    # ------------------------------------------------------------------
+    # ISP-узлы и режим «Чистый кадр»
+    # ------------------------------------------------------------------
+    def _set_isp_option(self, option_id, value, label):
+        """Отправить опцию один раз (повторно только при смене значения) и записать результат в отчёт."""
+        value = int(value)
+        if self._isp_applied.get(option_id) == value:
+            return
+        ok = bool(self.put_option(option_id, value))
+        readback = self.get_option(option_id) if ok else None
+        self._isp_applied[option_id] = value
+        self._isp_report[label] = {'value': value, 'ok': ok, 'readback': readback}
+
+    def apply_isp_settings(self, cfg):
+        """Применить узлы ISP из словаря настроек. Ключи, которых нет в cfg, не трогаются."""
+        if 'miicam_color_matrix' in cfg:
+            self._set_isp_option(MIICAM_OPTION_COLORMATIX, bool(cfg['miicam_color_matrix']), 'ColorMatrix')
+        if 'miicam_wb_gain_enable' in cfg:
+            self._set_isp_option(MIICAM_OPTION_WBGAIN, bool(cfg['miicam_wb_gain_enable']), 'WBGain')
+        if 'miicam_tone_curve' in cfg:
+            self._set_isp_option(MIICAM_OPTION_CURVE, int(cfg['miicam_tone_curve']), 'ToneCurve')
+        if 'miicam_linear_tone' in cfg:
+            self._set_isp_option(MIICAM_OPTION_LINEAR, int(cfg['miicam_linear_tone']), 'LinearTone')
+        if 'miicam_sharpening' in cfg:
+            strength = max(0, min(500, int(cfg['miicam_sharpening'])))
+            # strength == 0 -> выключено; иначе (threshold<<24)|(radius<<16)|strength, radius=2
+            self._set_isp_option(MIICAM_OPTION_SHARPENING, 0 if strength == 0 else (2 << 16) | strength, 'Sharpening')
+        if 'miicam_demosaic' in cfg:
+            self._set_isp_option(MIICAM_OPTION_DEMOSAIC, int(cfg['miicam_demosaic']), 'Demosaic')
+        if cfg.get('miicam_clean_frame'):
+            # В режиме «Чистый кадр» баланс белого не должен подстраиваться сам ни при каких условиях.
+            self._set_isp_option(MIICAM_OPTION_AWB_CONTINUOUS, 0, 'AWBContinuous')
+
+    def get_clean_frame_report(self):
+        """Что реально приняла камера и что может испортить воспроизводимость кадра."""
+        warnings = []
+        if self.auto_exposure:
+            warnings.append("Автоэкспозиция включена: яркость кадра будет плавать.")
+        if self.gain_percent > 100:
+            warnings.append(f"Усиление {self.gain_percent}% > 100%: лишний шум. Лучше менять свет или выдержку.")
+        flicker = exposure_flicker_warning(self.exposure_us, self.anti_flicker)
+        if flicker:
+            warnings.append(flicker)
+        options = dict(self._isp_report)
+        failed = [name for name, r in options.items() if not r['ok']]
+        if failed:
+            warnings.append("Камера отклонила опции: " + ", ".join(failed) + " (на этой модели не поддерживаются).")
+        return {'options': options, 'failed': failed, 'warnings': warnings}
 
     def apply_settings_dict(self, cfg):
         """Batch apply settings dictionary to the camera hardware without overwriting calibrated AWB."""
@@ -1391,6 +1442,8 @@ class MiiCamCapture:
             self.set_flips(bool(cfg.get('miicam_h_flip', False)), bool(cfg.get('miicam_v_flip', False)))
         if 'miicam_anti_flicker' in cfg:
             self.set_anti_flicker(int(cfg.get('miicam_anti_flicker', 1)))
+
+        self.apply_isp_settings(cfg)
 
         # White balance handling:
         # Only apply manual WB channel gain offsets if explicitly non-zero.

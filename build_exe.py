@@ -5,7 +5,6 @@
 
 import os
 import sys
-import shutil
 import subprocess
 
 SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))

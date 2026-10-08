@@ -11,7 +11,6 @@
 import sys
 import os
 import csv
-import time
 import uuid
 import hmac
 import hashlib
@@ -19,7 +18,7 @@ import platform
 import subprocess
 from datetime import datetime
 import tkinter as tk
-from tkinter import ttk, messagebox, filedialog
+from tkinter import ttk, messagebox
 
 # Внутренний секретный ключ подписи лицензий (Master Secret)
 _MASTER_SALT = b"ELUTEK-SARA-RGB-ANALYSIS-PROT-2026-v12"

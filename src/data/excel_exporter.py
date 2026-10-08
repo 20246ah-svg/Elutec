@@ -1,18 +1,15 @@
 import os
-import math
 from datetime import datetime
-from typing import List, Optional, Any, Dict, Tuple
+from typing import List, Optional, Dict
 
 import numpy as np
 
 from openpyxl import Workbook, load_workbook
 from openpyxl.styles import Font, Alignment, PatternFill
-from openpyxl.chart import LineChart, Reference
 from openpyxl.utils import get_column_letter
 
 from ..analysis.annotations import Annotation, AnnotationManager
 from ..utils.math_utils import adaptive_log_y_range, _py_scalar
-from ..config import RGB_Y_MIN, RGB_Y_MAX                                                           
 
 def _hex_to_fill(hex_color: str) -> PatternFill:
     hex_clean = str(hex_color or '').lstrip('#').upper()
@@ -81,167 +78,6 @@ def _filter_annotations(annotations, is_auto: Optional[bool] = None) -> List[Ann
     return sorted([ann for ann in annotations if ann.is_auto == is_auto], key=lambda a: a.time_ms)
 
 
-def _fill_annotation_sheet_headers(ws, has_log: bool = True):
-    headers = _marker_table_headers(has_log)
-    for col, header in enumerate(headers, 1):
-        cell = ws.cell(row=1, column=col, value=header)
-        cell.font = Font(bold=True, size=12)
-        cell.alignment = Alignment(horizontal='center')
-        cell.fill = PatternFill(start_color="D3D3D3", end_color="D3D3D3", fill_type="solid")
-    for col, width in enumerate(_marker_table_widths(has_log), 1):
-        ws.column_dimensions[get_column_letter(col)].width = width
-
-
-def _fill_auto_annotation_sheet_headers(ws):
-    headers = [
-        '#', 'На графике (с)', 'Минуты', 'R', 'G', 'B',
-        'RGB_sum_slope_30s', 'Transition_score', 'Описание', 'Цвет'
-    ]
-    widths = [5, 12, 14, 8, 8, 8, 18, 16, 30, 12]
-    for col, header in enumerate(headers, 1):
-        cell = ws.cell(row=1, column=col, value=header)
-        cell.font = Font(bold=True, size=12)
-        cell.alignment = Alignment(horizontal='center')
-        cell.fill = PatternFill(start_color="D3D3D3", end_color="D3D3D3", fill_type="solid")
-    for col, width in enumerate(widths, 1):
-        ws.column_dimensions[get_column_letter(col)].width = width
-
-
-def _write_auto_annotations_to_sheet(ws, annotations):
-    annotations = _filter_annotations(annotations, is_auto=True)
-    if ws.max_row > 1:
-        ws.delete_rows(2, ws.max_row - 1)
-
-    for row_idx, ann in enumerate(annotations, 2):
-        seconds = None
-        minutes = None
-        try:
-            seconds = float(ann.time_ms) / 1000.0
-        except Exception:
-            seconds = None
-        try:
-            minutes = float(ann.time_ms) / 60000.0
-        except Exception:
-            minutes = None
-
-        row_values = [
-            row_idx - 1,
-            _py_scalar(round(seconds, 3) if seconds is not None else None),
-            _py_scalar(round(minutes, 3) if minutes is not None else None),
-            _py_scalar(ann.r),
-            _py_scalar(ann.g),
-            _py_scalar(ann.b),
-            _py_scalar(ann.rgb_sum_slope_30s),
-            _py_scalar(ann.transition_score),
-            ann.description,
-        ]
-        for col, value in enumerate(row_values, 1):
-            ws.cell(row=row_idx, column=col, value=value)
-
-        color_cell = ws.cell(row=row_idx, column=len(row_values) + 1, value="")
-        color_cell.fill = _hex_to_fill(ann.color)
-
-
-def _write_annotations_to_sheet(ws, annotations, saved_data: Optional[List] = None, has_log: bool = True):
-    if ws.max_row > 1:
-        ws.delete_rows(2, ws.max_row - 1)
-    sorted_anns = _filter_annotations(annotations, is_auto=False)
-    headers = _marker_table_headers(has_log)
-    color_col = len(headers)
-    row_fill = PatternFill(start_color="FFF2CC", end_color="FFF2CC", fill_type="solid")
-
-    for row_idx, ann in enumerate(sorted_anns, 2):
-        seconds = None
-        minutes = None
-        try:
-            seconds = float(ann.time_ms) / 1000.0
-        except Exception:
-            seconds = None
-        try:
-            minutes = float(ann.time_ms) / 60000.0
-        except Exception:
-            minutes = None
-        vals = _annotation_values_at_time(saved_data, ann.time_ms, has_log)
-        row_values = [
-            row_idx - 1,
-            _py_scalar(round(seconds, 3) if seconds is not None else None),
-            _py_scalar(round(minutes, 3) if minutes is not None else None),
-            ann.created_at.strftime("%Y-%m-%d %H:%M:%S"),
-            vals['r'], vals['g'], vals['b'],
-        ]
-        if has_log:
-            row_values.extend([vals['log_br'], vals['log_bg']])
-        row_values.append(ann.description)
-
-        for col, value in enumerate(row_values, 1):
-            cell = ws.cell(row=row_idx, column=col, value=value)
-            cell.fill = row_fill
-
-        color_cell = ws.cell(row=row_idx, column=color_col, value="")
-        color_cell.fill = _hex_to_fill(ann.color)
-
-
-def _write_markers_block(ws, annotations, saved_data=None, has_log=True, start_col=17, start_row=1):
-    annotations = sorted(_normalize_annotations(annotations), key=lambda a: a.time_ms)
-    if not annotations:
-        return start_row
-
-    header_fill = PatternFill(
-        start_color="D3D3D3", end_color="D3D3D3", fill_type="solid"
-    )
-    title_cell = ws.cell(row=start_row, column=start_col, value="📌 Метки")
-    title_cell.font = Font(bold=True, size=13)
-
-    headers = _marker_table_headers(has_log)
-    header_row = start_row + 1
-    for col_offset, header in enumerate(headers):
-        cell = ws.cell(row=header_row, column=start_col + col_offset, value=header)
-        cell.font = Font(bold=True, size=11)
-        cell.alignment = Alignment(horizontal='center')
-        cell.fill = header_fill
-
-    row_fill = PatternFill(
-        start_color="FFF2CC", end_color="FFF2CC", fill_type="solid"
-    )
-    color_col_offset = len(headers) - 1
-
-    for i, ann in enumerate(annotations, 1):
-        row = header_row + i
-        seconds = None
-        minutes = None
-        try:
-            seconds = float(ann.time_ms) / 1000.0
-        except Exception:
-            seconds = None
-        try:
-            minutes = float(ann.time_ms) / 60000.0
-        except Exception:
-            minutes = None
-        vals = _annotation_values_at_time(saved_data, ann.time_ms, has_log)
-        row_values = [
-            i,
-            _py_scalar(round(seconds, 3) if seconds is not None else None),
-            _py_scalar(round(minutes, 3) if minutes is not None else None),
-            ann.created_at.strftime("%Y-%m-%d %H:%M:%S"),
-            vals['r'], vals['g'], vals['b'],
-        ]
-        if has_log:
-            row_values.extend([vals['log_br'], vals['log_bg']])
-        row_values.append(ann.description)
-
-        for col_offset, value in enumerate(row_values):
-            cell = ws.cell(row=row, column=start_col + col_offset, value=value)
-            cell.fill = row_fill
-
-        color_cell = ws.cell(row=row, column=start_col + color_col_offset, value="")
-        color_cell.fill = _hex_to_fill(ann.color)
-
-    for col_offset, width in enumerate(_marker_table_widths(has_log)):
-        ws.column_dimensions[get_column_letter(start_col + col_offset)].width = width
-
-    return header_row + len(annotations) + 2
-
-
 def _annotation_row_map(saved_data, annotations):
     if not saved_data or not annotations:
         return {}
@@ -258,43 +94,6 @@ def _annotation_column_layout(has_log: bool):
                                                                                       
         return {'time': 12, 'marker_rgb': 16, 'marker_log': 17}
     return {'time': 4, 'marker_rgb': 5, 'marker_log': None}
-
-
-def _apply_marker_chart_columns(ws, saved_data, annotations, has_log, log_y_max):
-    annotations = _normalize_annotations(annotations)
-    if not annotations:
-        return _annotation_column_layout(has_log)
-
-    layout = _annotation_column_layout(has_log)
-    row_map = _annotation_row_map(saved_data, annotations)
-
-    for col, header in ((layout['marker_rgb'], 'Метка ▲'),):
-        cell = ws.cell(row=1, column=col, value=header)
-        cell.font = Font(bold=True, size=12)
-        cell.alignment = Alignment(horizontal='center')
-        cell.fill = PatternFill(
-            start_color="D3D3D3", end_color="D3D3D3", fill_type="solid"
-        )
-
-    if has_log and layout['marker_log']:
-        cell = ws.cell(row=1, column=layout['marker_log'], value='Метка ▲ Log')
-        cell.font = Font(bold=True, size=12)
-        cell.alignment = Alignment(horizontal='center')
-        cell.fill = PatternFill(
-            start_color="D3D3D3", end_color="D3D3D3", fill_type="solid"
-        )
-
-    for row_idx in row_map:
-        excel_row = row_idx + 2
-        ws.cell(row=excel_row, column=layout['marker_rgb'], value=RGB_Y_MAX)
-        if has_log and layout['marker_log']:
-            ws.cell(row=excel_row, column=layout['marker_log'], value=float(log_y_max))
-
-    ws.column_dimensions[get_column_letter(layout['marker_rgb'])].width = 10
-    if has_log and layout['marker_log']:
-        ws.column_dimensions[get_column_letter(layout['marker_log'])].width = 12
-
-    return layout
 
 
                                            
@@ -539,24 +338,6 @@ def save_annotations_to_workbook(excel_path: str, annotation_manager: Annotation
     _write_marker_rows(wb['Автометки'], annotations, saved_data=None, has_log=has_log, is_auto=True)
     wb.save(excel_path)
     return excel_path
-
-
-def save_annotations_to_excel(save_folder: str, annotation_manager: AnnotationManager,
-                              filename_base: str, excel_path: Optional[str] = None) -> Optional[str]:
-    annotations = annotation_manager.get_annotations()
-    if excel_path:
-        return save_annotations_to_workbook(excel_path, annotation_manager)
-    if not annotations:
-        return None
-    filename = os.path.join(save_folder, f"{filename_base}_annotations.xlsx")
-    wb = Workbook()
-    wb.remove(wb.active)
-    _ensure_export_sheets(wb, has_log=True)
-    _write_marker_rows(wb['Все метки'], annotations, has_log=True, is_auto=None)
-    _write_marker_rows(wb['Ручные метки'], annotations, has_log=True, is_auto=False)
-    _write_marker_rows(wb['Автометки'], annotations, has_log=True, is_auto=True)
-    wb.save(filename)
-    return filename
 
 
 def save_to_excel(save_folder: str, saved_data: List, excel_path: Optional[str] = None,

@@ -1,15 +1,19 @@
 import numpy as np
-import math
 
 from ..config import (
     LOG_Y_MARGIN_FRAC,
-    RATE_WINDOW_MS, RATE_MIN_POINTS,
+    RATE_WINDOW_MS,
+    RATE_MIN_POINTS,
     RGB_SUM_SMOOTH_WINDOW_MS,
-    CHROM_BASELINE_LOOKBACK_MS, CHROM_BASELINE_GAP_MS, CHROM_BASELINE_MIN_POINTS,
-    TRANSITION_NOISE_RGB_VECTOR, TRANSITION_NOISE_CHROM_SPEED,
-    TRANSITION_NOISE_RGB_SUM_SLOPE, TRANSITION_NOISE_K_CHROM,
-    TRANSITION_NOISE_LOG_RATIO_SPEED, TRANSITION_Z_CAP,
-    DELTA_FAST_MS
+    CHROM_BASELINE_LOOKBACK_MS,
+    CHROM_BASELINE_GAP_MS,
+    CHROM_BASELINE_MIN_POINTS,
+    TRANSITION_NOISE_RGB_VECTOR,
+    TRANSITION_NOISE_CHROM_SPEED,
+    TRANSITION_NOISE_RGB_SUM_SLOPE,
+    TRANSITION_NOISE_K_CHROM,
+    TRANSITION_NOISE_LOG_RATIO_SPEED,
+    TRANSITION_Z_CAP,
 )
 
 def compute_log_br(mean_b, mean_r):
@@ -263,30 +267,4 @@ def compute_transition_score(rgb_vector_speed, chromaticity_speed, rgb_sum_slope
     except Exception:
         return float('nan')
 
-def compute_window_delta(time_ms_values, signal_values, window_ms=DELTA_FAST_MS):
-    try:
-        if time_ms_values is None or signal_values is None:
-            return float('nan')
-        if len(time_ms_values) < 2 or len(signal_values) < 2:
-            return float('nan')
-
-        t_all = np.asarray(time_ms_values, dtype=np.float64)
-        y_all = np.asarray(signal_values, dtype=np.float64)
-        finite = np.isfinite(t_all) & np.isfinite(y_all)
-        if int(np.count_nonzero(finite)) < 2:
-            return float('nan')
-
-        valid_idx = np.where(finite)[0]
-        current_idx = int(valid_idx[-1])
-        current_t = float(t_all[current_idx])
-        current_y = float(y_all[current_idx])
-        target_t = current_t - float(window_ms)
-
-        prev_candidates = valid_idx[t_all[valid_idx] <= target_t]
-        if prev_candidates.size == 0:
-            return float('nan')
-        prev_idx = int(prev_candidates[-1])
-        return float(current_y - float(y_all[prev_idx]))
-    except Exception:
-        return float('nan')
 

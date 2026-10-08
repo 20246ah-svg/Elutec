@@ -224,7 +224,7 @@ class Tests(unittest.TestCase):
         # Pause toggle
         worker.toggle_pause()
         self.assertTrue(worker.is_paused)
-        worker.set_paused(False)
+        worker.toggle_pause()
         self.assertFalse(worker.is_paused)
 
         # Speed adjustment
@@ -472,16 +472,6 @@ class Tests(unittest.TestCase):
         self.assertTrue(cap.frame_preload)
         self.assertEqual(cap.thread_priority, 2)
 
-        # Test high FPS mode preset helper
-        cap.set_high_fps_mode(90)
-        self.assertEqual(cap.exposure_us, 8000)
-        self.assertEqual(cap.binning_mode, 2)
-        self.assertEqual(cap.speed, 2)
-
-        cap.set_high_fps_mode(60)
-        self.assertEqual(cap.exposure_us, 15000)
-        self.assertEqual(cap.binning_mode, 1)
-
         cap.release()
 
     def test_miicam_settings_change_preserves_awb(self):
@@ -522,12 +512,6 @@ class Tests(unittest.TestCase):
         self.assertIn("miicam_binning", DEFAULT_CONFIG)
         self.assertEqual(DEFAULT_CONFIG["detector_compare_mode"], "split")
         self.assertEqual(DEFAULT_CONFIG["detector_split_pos"], 50)
-
-    def test_preview_worker_fps(self):
-        from src.gui.setup_app import PreviewWorker
-        w = PreviewWorker(cap=None)
-        self.assertEqual(w.get_fps(), 0.0)
-        w.stop()
 
     def test_settings_window_detector_tab_visibility(self):
         import tkinter as tk
@@ -792,12 +776,12 @@ class Tests(unittest.TestCase):
             o.cursor_hud_label = MockWidget()
             o.win = MockWidget()
             o._apply_elutek_qss()
-            self.assertIn('#F1F5F9', o.cursor_hud.styleSheet())
-            self.assertIn('#CBD5E1', o.cursor_hud.styleSheet())
+            self.assertIn('#E8EDE7', o.cursor_hud.styleSheet())
+            self.assertIn('#D1D9D2', o.cursor_hud.styleSheet())
             o.theme_mode = 'dark'
             o._apply_elutek_qss()
-            self.assertIn('rgba(17, 24, 39, 0.85)', o.cursor_hud.styleSheet())
-            self.assertIn('#2A3451', o.cursor_hud.styleSheet())
+            self.assertIn('#131C23', o.cursor_hud.styleSheet())
+            self.assertIn('#24323A', o.cursor_hud.styleSheet())
             return
 
         o = Probe.__new__(Probe)
@@ -814,14 +798,14 @@ class Tests(unittest.TestCase):
         o.notification_settings = {}
         o._apply_elutek_qss()
         hud_qss = o.cursor_hud.styleSheet()
-        self.assertIn('#F1F5F9', hud_qss)
-        self.assertIn('#CBD5E1', hud_qss)
+        self.assertIn('#E8EDE7', hud_qss)
+        self.assertIn('#D1D9D2', hud_qss)
 
         o.theme_mode = 'dark'
         o._apply_elutek_qss()
         dark_hud_qss = o.cursor_hud.styleSheet()
-        self.assertIn('rgba(17, 24, 39, 0.85)', dark_hud_qss)
-        self.assertIn('#2A3451', dark_hud_qss)
+        self.assertIn('#131C23', dark_hud_qss)
+        self.assertIn('#24323A', dark_hud_qss)
 
     def test_dialog_window_flags(self):
         try:

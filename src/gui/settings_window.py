@@ -8,7 +8,6 @@
 """
 
 import os
-import sys
 import json
 import tkinter as tk
 from tkinter import ttk, messagebox, colorchooser, simpledialog
@@ -25,7 +24,8 @@ from ..config import (
     AROM_T_MIN_SEC, AROM_T_MAX_SEC, BR_T_MIN_SEC, BR_T_MAX_SEC, ABR_T_MIN_SEC, ABR_T_MAX_SEC,
     DEFAULT_DETECTOR_PRESETS, DEFAULT_AUTO_MARK_COOLDOWN_SEC, DEFAULT_PLAYER_HUD_METRICS
 )
-from ..utils.helpers import is_miicam_source
+from ..data.project_store import ProjectStore
+from .theme import get_palette
 
 APP_SETTINGS_FILE = "config.json"
 
@@ -122,6 +122,13 @@ DEFAULT_CONFIG = {
     "miicam_h_flip": False,
     "miicam_v_flip": False,
     "miicam_anti_flicker": 1,
+    "miicam_color_matrix": True,
+    "miicam_wb_gain_enable": True,
+    "miicam_tone_curve": 2,
+    "miicam_linear_tone": 1,
+    "miicam_sharpening": 0,
+    "miicam_demosaic": 0,
+    "miicam_clean_frame": False,
     "detector_compare_mode": "split",
     "detector_split_pos": 50,
     "detector_presets": DEFAULT_DETECTOR_PRESETS,
@@ -167,11 +174,15 @@ def save_settings(data):
 
 
 class SettingsWindow:
-    def __init__(self, parent, config, on_apply=None, current_cap=None):
+    def __init__(self, parent, config, on_apply=None, current_cap=None, project_store=None):
         self.parent = parent
         self.config = config
         self.on_apply = on_apply
         self.current_cap = current_cap
+        self.project_store = project_store or ProjectStore()
+        # Preserve the old in-memory API for external callers/tests; the main
+        # application always passes ProjectStore and uses the isolated libraries.
+        self._legacy_preset_compat = project_store is None
 
         # Determine whether MiiCam (RGB detector) is physically connected and active
         self.is_miicam = (
@@ -235,81 +246,98 @@ class SettingsWindow:
             pass
 
         light = bool(self.config.get("light_theme", False))
-        bg = "#F2F3F8" if light else "#0E121B"
-        panel = "#FFFFFF" if light else "#111827"
-        fg = "#0E121B" if light else "#FFFFFF"
-        border = "#C6CDE1" if light else "#2A3451"
-        accent = "#2A3451" if light else "#A1ADCE"
+        colors = get_palette(light)
+        bg = colors['background']
+        panel = colors['surface']
+        panel_alt = colors['surface_alt']
+        fg = colors['text']
+        muted = colors['muted']
+        border = colors['border']
+        accent = colors['accent']
 
         self.win.configure(bg=bg)
-        style.configure(".", background=bg, foreground=fg, font=("Segoe UI", 10))
-        style.configure("TFrame", background=bg)
-        style.configure("TLabel", background=bg, foreground=fg)
-        style.configure("TNotebook", background=bg, borderwidth=0)
-        style.configure("TNotebook.Tab", background=panel, foreground=fg, padding=(12, 7))
-        style.map("TNotebook.Tab", background=[("selected", "#2A3451" if light else "#1C2336")],
-                  foreground=[("selected", "#FFFFFF")])
-        style.configure("TEntry", fieldbackground=panel, foreground=fg,
-                        bordercolor=border, lightcolor=border, darkcolor=border,
-                        insertcolor=fg, insertwidth=2)
-        style.map("TEntry", fieldbackground=[("focus", panel)], foreground=[("focus", fg)])
-        style.configure("TSpinbox", fieldbackground=panel, foreground=fg,
-                        background=panel, arrowcolor=accent,
-                        bordercolor=border, lightcolor=border, darkcolor=border,
-                        insertcolor=fg, insertwidth=2)
-        style.map("TSpinbox",
-                  fieldbackground=[("focus", panel), ("active", panel)],
-                  foreground=[("focus", fg), ("active", fg)],
-                  background=[("focus", panel), ("active", panel)],
-                  arrowcolor=[("focus", accent), ("active", accent)])
-        style.configure("TCombobox", fieldbackground=panel, background=panel,
-                        foreground=fg, arrowcolor=accent,
+        style.configure('.', background=bg, foreground=fg, font=('Segoe UI', 10))
+        style.configure('TFrame', background=bg)
+        style.configure('App.TFrame', background=bg)
+        style.configure('Header.TFrame', background=panel, relief='solid', borderwidth=1,
                         bordercolor=border, lightcolor=border, darkcolor=border)
-        style.map("TCombobox",
-                  fieldbackground=[("readonly", panel), ("focus", panel), ("active", panel)],
-                  foreground=[("readonly", fg), ("focus", fg), ("active", fg)],
-                  background=[("readonly", panel), ("focus", panel), ("active", panel)])
-        style.configure("TCheckbutton", background=bg, foreground=fg)
-        style.map("TCheckbutton", background=[("active", bg), ("pressed", bg), ("focus", bg)],
-                  foreground=[("active", fg), ("pressed", fg), ("focus", fg)])
-        style.configure("TLabelframe", background=bg, foreground=accent, bordercolor=border)
-        style.configure("TLabelframe.Label", background=bg, foreground=accent, font=("Segoe UI", 10, "bold"))
-        
-        # Treeview styling with fixed dark-mode active header
-        style.configure("Treeview", background=panel, fieldbackground=panel,
-                        foreground=fg, bordercolor=border, rowheight=24)
-        style.map("Treeview", background=[("selected", "#2A3451" if light else "#2563EB")],
-                  foreground=[("selected", "#FFFFFF")])
+        style.configure('BrandMark.TLabel', background=accent, foreground=colors['accent_on'],
+                        font=('Segoe UI', 14, 'bold'), padding=(9, 5))
+        style.configure('HeaderTitle.TLabel', background=panel, foreground=fg,
+                        font=('Segoe UI', 15, 'bold'))
+        style.configure('HeaderSub.TLabel', background=panel, foreground=muted,
+                        font=('Segoe UI', 9))
+        style.configure('TLabel', background=bg, foreground=fg)
+        style.configure('TNotebook', background=bg, borderwidth=0, tabmargins=(0, 0, 0, 0))
+        style.configure('TNotebook.Tab', background=panel_alt, foreground=muted,
+                        padding=(13, 9), borderwidth=0, font=('Segoe UI', 9, 'bold'))
+        style.map('TNotebook.Tab', background=[('selected', colors['accent_soft']), ('active', colors['surface_hover'])],
+                  foreground=[('selected', accent), ('active', fg)])
+        style.configure('TEntry', fieldbackground=panel_alt, foreground=fg, padding=(8, 6),
+                        bordercolor=border, lightcolor=border, darkcolor=border,
+                        insertcolor=fg, insertwidth=2)
+        style.map('TEntry', fieldbackground=[('focus', panel)], foreground=[('focus', fg)])
+        style.configure('TSpinbox', fieldbackground=panel_alt, foreground=fg,
+                        background=panel_alt, arrowcolor=muted, padding=(6, 5),
+                        bordercolor=border, lightcolor=border, darkcolor=border,
+                        insertcolor=fg, insertwidth=2)
+        style.map('TSpinbox', fieldbackground=[('focus', panel), ('active', panel)],
+                  foreground=[('focus', fg), ('active', fg)],
+                  background=[('focus', panel), ('active', panel)],
+                  arrowcolor=[('focus', accent), ('active', accent)])
+        style.configure('TCombobox', fieldbackground=panel_alt, background=panel_alt,
+                        foreground=fg, arrowcolor=muted, padding=(7, 5),
+                        bordercolor=border, lightcolor=border, darkcolor=border)
+        style.map('TCombobox', fieldbackground=[('readonly', panel_alt), ('focus', panel), ('active', panel)],
+                  foreground=[('readonly', fg), ('focus', fg), ('active', fg)],
+                  background=[('readonly', panel_alt), ('focus', panel), ('active', panel)],
+                  arrowcolor=[('focus', accent), ('active', accent)])
+        style.configure('TButton', background=panel, foreground=fg, padding=(10, 7),
+                        borderwidth=1, bordercolor=border, font=('Segoe UI', 9, 'bold'))
+        style.map('TButton', background=[('pressed', colors['surface_hover']), ('active', colors['surface_hover'])],
+                  bordercolor=[('active', accent)], foreground=[('disabled', muted)])
+        style.configure('Primary.TButton', background=accent, foreground=colors['accent_on'],
+                        padding=(13, 9), borderwidth=0, font=('Segoe UI', 9, 'bold'))
+        style.map('Primary.TButton', background=[('pressed', colors['accent_hover']), ('active', colors['accent_hover'])])
+        style.configure('Quiet.TButton', background=panel, foreground=fg, padding=(10, 7),
+                        borderwidth=1, bordercolor=border, font=('Segoe UI', 9, 'bold'))
+        style.map('Quiet.TButton', background=[('pressed', colors['surface_hover']), ('active', colors['surface_hover'])],
+                  bordercolor=[('active', accent)])
+        style.configure('TCheckbutton', background=panel, foreground=fg, padding=(4, 4))
+        style.map('TCheckbutton', background=[('active', panel), ('pressed', panel)],
+                  foreground=[('active', fg), ('pressed', fg)])
+        style.configure('TRadiobutton', background=panel, foreground=fg, padding=(5, 4))
+        style.map('TRadiobutton', background=[('active', panel_alt), ('pressed', panel_alt)],
+                  foreground=[('active', fg), ('pressed', fg)])
+        style.configure('TLabelframe', background=panel, foreground=fg, bordercolor=border,
+                        lightcolor=border, darkcolor=border, relief='solid', borderwidth=1)
+        style.configure('TLabelframe.Label', background=panel, foreground=fg,
+                        font=('Segoe UI', 10, 'bold'), padding=(4, 0))
+        style.configure('Treeview', background=panel, fieldbackground=panel,
+                        foreground=fg, bordercolor=border, rowheight=29, font=('Segoe UI', 9))
+        style.map('Treeview', background=[('selected', colors['accent_soft'])],
+                  foreground=[('selected', accent)])
+        style.configure('Treeview.Heading', background=panel_alt, foreground=muted,
+                        font=('Segoe UI', 9, 'bold'), relief='flat', padding=(8, 7))
+        style.map('Treeview.Heading', background=[('active', colors['surface_hover'])],
+                  foreground=[('active', fg)])
+        style.configure('Vertical.TScrollbar', background=bg, troughcolor=bg,
+                        bordercolor=bg, arrowcolor=muted)
 
-        header_bg = "#E2E8F0" if light else "#1E293B"
-        header_active = "#CBD5E1" if light else "#334155"
-        header_fg = "#0E121B" if light else "#93C5FD"
-        style.configure(
-            "Treeview.Heading",
-            background=header_bg,
-            foreground=header_fg,
-            font=("Segoe UI", 9, "bold"),
-            relief="flat",
-            padding=4
-        )
-        style.map(
-            "Treeview.Heading",
-            background=[("active", header_active), ("pressed", header_active)],
-            foreground=[("active", header_fg), ("pressed", header_fg)]
-        )
+        outer = ttk.Frame(self.win, padding=16, style='App.TFrame')
+        outer.pack(fill='both', expand=True)
 
-        outer = ttk.Frame(self.win, padding=12)
-        outer.pack(fill="both", expand=True)
-
-        header_frame = ttk.Frame(outer)
-        header_frame.pack(fill="x", pady=(0, 8))
-        ttk.Label(
-            header_frame, text="⚙️ Настройки и параметры анализа",
-            font=("Segoe UI", 15, "bold")
-        ).pack(side="left")
+        header_frame = ttk.Frame(outer, style='Header.TFrame', padding=(16, 12))
+        header_frame.pack(fill='x', pady=(0, 12))
+        ttk.Label(header_frame, text='E', style='BrandMark.TLabel', anchor='center').pack(side='left')
+        header_copy = ttk.Frame(header_frame, style='Header.TFrame')
+        header_copy.pack(side='left', padx=(11, 0))
+        ttk.Label(header_copy, text='Настройки анализа', style='HeaderTitle.TLabel').pack(anchor='w')
+        ttk.Label(header_copy, text='Видео · графики · ROI · автометки · производительность',
+                  style='HeaderSub.TLabel').pack(anchor='w', pady=(2, 0))
 
         nb = ttk.Notebook(outer)
-        nb.pack(fill="both", expand=True)
+        nb.pack(fill='both', expand=True)
         self.nb = nb
 
         tab_video = ttk.Frame(nb, padding=14)
@@ -320,13 +348,13 @@ class SettingsWindow:
             tab_detector = ttk.Frame(nb, padding=14)
         tab_perf = ttk.Frame(nb, padding=14)
 
-        nb.add(tab_video, text="🎥 Видео и запись")
-        nb.add(tab_graphs, text="📈 Графики и формулы")
-        nb.add(tab_roi, text="📐 Область ROI")
-        nb.add(tab_notif, text="🔔 Автометки")
+        nb.add(tab_video, text='Видео и запись')
+        nb.add(tab_graphs, text='Графики и формулы')
+        nb.add(tab_roi, text='Область ROI')
+        nb.add(tab_notif, text='Автометки')
         if self.is_miicam:
-            nb.add(tab_detector, text="💡 RGB-детектор")
-        nb.add(tab_perf, text="⚡ Производительность")
+            nb.add(tab_detector, text='RGB-детектор')
+        nb.add(tab_perf, text='Производительность')
 
         # =========================================================================
         # 1. TAB: ВИДЕО И ЗАПИСЬ
@@ -430,7 +458,10 @@ class SettingsWindow:
 
         var_list_frame = ttk.Frame(lf_vars)
         var_list_frame.pack(fill="x")
-        self.custom_var_list = tk.Listbox(var_list_frame, height=3, bg=panel, fg=fg, selectbackground="#2563EB")
+        self.custom_var_list = tk.Listbox(var_list_frame, height=3, bg=panel, fg=fg,
+                                          selectbackground=colors['accent_soft'], selectforeground=accent,
+                                          relief='flat', highlightthickness=1, highlightbackground=border,
+                                          font=('Segoe UI', 9), activestyle='none')
         self.custom_var_list.pack(fill="x", expand=True)
 
         # Block 2: Custom Graphs
@@ -441,7 +472,7 @@ class SettingsWindow:
         cg_top.pack(fill="x", pady=(0, 4))
         self.custom_name_var = tk.StringVar(value="Доля синего (%)")
         self.custom_formula_var = tk.StringVar(value="NORM_B * 100")
-        self.custom_color_var = tk.StringVar(value="#00FFCC")
+        self.custom_color_var = tk.StringVar(value=colors["success"])
 
         ttk.Label(cg_top, text="Название:").pack(side="left", padx=(0, 4))
         ttk.Entry(cg_top, textvariable=self.custom_name_var, width=16).pack(side="left", padx=(0, 8))
@@ -463,7 +494,10 @@ class SettingsWindow:
 
         cg_list_frame = ttk.Frame(lf_custom)
         cg_list_frame.pack(fill="both", expand=True, pady=(4, 0))
-        self.custom_graph_list = tk.Listbox(cg_list_frame, height=3, bg=panel, fg=fg, selectbackground="#2563EB")
+        self.custom_graph_list = tk.Listbox(cg_list_frame, height=3, bg=panel, fg=fg,
+                                            selectbackground=colors['accent_soft'], selectforeground=accent,
+                                            relief='flat', highlightthickness=1, highlightbackground=border,
+                                            font=('Segoe UI', 9), activestyle='none')
         self.custom_graph_list.pack(fill="both", expand=True)
 
         # =========================================================================
@@ -697,9 +731,9 @@ class SettingsWindow:
         btn_bar = ttk.Frame(outer)
         btn_bar.pack(fill="x", pady=(10, 0))
 
-        ttk.Button(btn_bar, text="↩ Сбросить по умолчанию", command=self._reset).pack(side="left")
-        ttk.Button(btn_bar, text="Отмена", command=self.win.destroy).pack(side="right", padx=(6, 0))
-        ttk.Button(btn_bar, text="💾 Сохранить и применить", command=self._apply).pack(side="right")
+        ttk.Button(btn_bar, text="Сбросить по умолчанию", command=self._reset, style='Quiet.TButton').pack(side="left")
+        ttk.Button(btn_bar, text="Отмена", command=self.win.destroy, style='Quiet.TButton').pack(side="right", padx=(6, 0))
+        ttk.Button(btn_bar, text="Сохранить и применить", command=self._apply, style='Primary.TButton').pack(side="right")
 
     def _build_detector_tab(self, tab_detector, light):
         self.detector_vars = {}
@@ -714,37 +748,35 @@ class SettingsWindow:
 
         ttk.Label(p_row, text="Пресет сенсора:", font=("Segoe UI", 9, "bold")).pack(side="left", padx=(0, 6))
 
-        # Очистка устаревших встроенных пресетов: оставляем только "По умолчанию (Default)" и созданные пользователем
-        obsolete_presets = {
-            "Хроматографический спектр (ChromatoBoost)",
-            "Стандартный sRGB (sRGB Standard D65)",
-            "Бром (Bromine)",
-            "Ароматика (Aromatics)",
-            "Насыщенные углеводороды (Saturates)",
-            "Турбо 120 FPS (Низкая выдержка)",
-            "Бром",
-            "Ароматика",
-            "Насыщенные углеводороды",
-            "Турбо 120 FPS",
-        }
-        if "detector_presets" not in self.config or not isinstance(self.config.get("detector_presets"), dict):
-            self.config["detector_presets"] = dict(DEFAULT_DETECTOR_PRESETS)
-        else:
-            for obs in obsolete_presets:
-                self.config["detector_presets"].pop(obs, None)
-            if "По умолчанию (Default)" not in self.config["detector_presets"]:
-                self.config["detector_presets"]["По умолчанию (Default)"] = dict(DEFAULT_DETECTOR_PRESETS["По умолчанию (Default)"])
-
-        preset_names = list(self.config["detector_presets"].keys())
-        self.preset_var = tk.StringVar(value=preset_names[0] if preset_names else "По умолчанию (Default)")
+        self.preset_var = tk.StringVar(value="")
         self.cb_detector_presets = ttk.Combobox(
-            p_row, textvariable=self.preset_var, values=preset_names, state="readonly", width=32
+            p_row, textvariable=self.preset_var, values=(), state="readonly", width=31
         )
-        self.cb_detector_presets.pack(side="left", padx=(0, 8))
+        self.cb_detector_presets.pack(side="left", padx=(0, 6))
+
+        self.preset_scope_var = tk.StringVar(value="project" if self.project_store.root else "user")
+        scope_options = [("Мои пресеты", "user")]
+        if self.project_store.root:
+            scope_options.insert(0, ("Проект", "project"))
+        self._preset_scope_labels = {label: scope for label, scope in scope_options}
+        self._preset_scope_values = {scope: label for label, scope in scope_options}
+        self.preset_scope_label_var = tk.StringVar(value=self._preset_scope_values[self.preset_scope_var.get()])
+        ttk.Combobox(
+            p_row, textvariable=self.preset_scope_label_var,
+            values=[label for label, _ in scope_options], state="readonly", width=13
+        ).pack(side="left", padx=(0, 5))
+        self.preset_scope_label_var.trace_add("write", self._on_preset_scope_changed)
 
         ttk.Button(p_row, text="⚡ Применить", command=self._apply_detector_preset).pack(side="left", padx=2)
-        ttk.Button(p_row, text="💾 Сохранить как...", command=self._save_detector_preset).pack(side="left", padx=2)
-        ttk.Button(p_row, text="🗑️ Удалить", command=self._delete_detector_preset).pack(side="left", padx=2)
+        ttk.Button(p_row, text="💾 Сохранить копию…", command=self._save_detector_preset).pack(side="left", padx=2)
+        ttk.Button(p_row, text="По умолчанию", command=self._set_detector_preset_default).pack(side="left", padx=2)
+        ttk.Button(p_row, text="🗑️", command=self._delete_detector_preset, width=3).pack(side="left", padx=2)
+        active_preset_id = self.config.get("active_detector_preset_id")
+        has_active_preset = bool(active_preset_id and self.project_store.get_preset(active_preset_id, "detector"))
+        preferred_preset_id = active_preset_id if has_active_preset else self.project_store.get_default_preset_id("detector")
+        self._applied_detector_preset_id = active_preset_id if has_active_preset else None
+        self._pending_default_preset_id = None
+        self._refresh_detector_presets(preferred_preset_id)
 
         # 2. Sub-Notebook for MiiCam (Color, Expo, WB, Control, Flip)
         nb_det = ttk.Notebook(tab_detector)
@@ -755,12 +787,14 @@ class SettingsWindow:
         tab_sub_wb = ttk.Frame(nb_det, padding=12)
         tab_sub_ctrl = ttk.Frame(nb_det, padding=12)
         tab_sub_flip = ttk.Frame(nb_det, padding=12)
+        tab_sub_clean = ttk.Frame(nb_det, padding=12)
 
         nb_det.add(tab_sub_color, text="🎨 Цвет (Color)")
         nb_det.add(tab_sub_expo, text="⏱️ Экспозиция (Expo)")
         nb_det.add(tab_sub_wb, text="⚖️ Баланс белого (WB)")
         nb_det.add(tab_sub_ctrl, text="⚡ Управление (Control)")
         nb_det.add(tab_sub_flip, text="🔄 Отражение (Flip)")
+        nb_det.add(tab_sub_clean, text="🧼 Чистый кадр")
 
         # --- SUB-TAB: COLOR ---
         self.detector_vars["miicam_brightness"] = tk.IntVar(value=int(self.config.get("miicam_brightness", 0)))
@@ -957,6 +991,73 @@ class SettingsWindow:
         cb_vf = ttk.Checkbutton(tab_sub_flip, text=" Отразить по вертикали (Vertical Flip)", variable=self.detector_vars["miicam_v_flip"], command=self._on_detector_param_changed)
         cb_vf.pack(anchor="w", pady=6)
 
+        # --- SUB-TAB: CLEAN FRAME (нейтральный ISP) ---
+        dv = self.detector_vars
+        dv["miicam_color_matrix"] = tk.BooleanVar(value=bool(self.config.get("miicam_color_matrix", True)))
+        dv["miicam_wb_gain_enable"] = tk.BooleanVar(value=bool(self.config.get("miicam_wb_gain_enable", True)))
+        dv["miicam_linear_tone"] = tk.IntVar(value=int(self.config.get("miicam_linear_tone", 1)))
+        dv["miicam_tone_curve"] = tk.IntVar(value=int(self.config.get("miicam_tone_curve", 2)))
+        dv["miicam_sharpening"] = tk.IntVar(value=int(self.config.get("miicam_sharpening", 0)))
+        dv["miicam_demosaic"] = tk.IntVar(value=int(self.config.get("miicam_demosaic", 0)))
+        dv["miicam_clean_frame"] = tk.BooleanVar(value=bool(self.config.get("miicam_clean_frame", False)))
+
+        ttk.Label(
+            tab_sub_clean,
+            text=("Пресет «Чистый кадр» отключает все «улучшалки» ISP камеры (цветовая матрица, баланс белого, "
+                  "тон-кривая, резкость), фиксирует выдержку (кратно 10 мс) и держит усиление на минимуме.\n"
+                  "Пороги детектора, подобранные под обычный режим, после включения нужно проверить заново."),
+            wraplength=640, justify="left",
+        ).pack(anchor="w", pady=(0, 8))
+
+        row_clean_btn = ttk.Frame(tab_sub_clean)
+        row_clean_btn.pack(fill="x", pady=(0, 8))
+        ttk.Button(row_clean_btn, text="🧼 Применить «Чистый кадр»",
+                   command=self._apply_clean_frame_preset).pack(side="left", padx=(0, 8))
+        ttk.Button(row_clean_btn, text="🔍 Что принято камерой",
+                   command=self._show_clean_frame_report).pack(side="left", padx=(0, 8))
+
+        ttk.Checkbutton(tab_sub_clean, text=" Режим «Чистый кадр» (блокировать автоподстройку баланса белого)",
+                        variable=dv["miicam_clean_frame"], command=self._on_detector_param_changed).pack(anchor="w", pady=2)
+        ttk.Checkbutton(tab_sub_clean, text=" Цветовая матрица производителя (COLORMATIX)",
+                        variable=dv["miicam_color_matrix"], command=self._on_detector_param_changed).pack(anchor="w", pady=2)
+        ttk.Checkbutton(tab_sub_clean, text=" Встроенный баланс белого (WBGAIN)",
+                        variable=dv["miicam_wb_gain_enable"], command=self._on_detector_param_changed).pack(anchor="w", pady=2)
+        ttk.Checkbutton(tab_sub_clean, text=" Линейный тон-маппинг (LINEAR)",
+                        variable=dv["miicam_linear_tone"], onvalue=1, offvalue=0,
+                        command=self._on_detector_param_changed).pack(anchor="w", pady=2)
+
+        row_curve = ttk.Frame(tab_sub_clean)
+        row_curve.pack(fill="x", pady=4)
+        ttk.Label(row_curve, text="Тон-кривая (CURVE):", width=24, anchor="w").pack(side="left")
+        self.curve_combo_var = tk.StringVar()
+        _curve_labels = ["0: Выключена (нейтрально)", "1: Полиномиальная", "2: Логарифмическая (заводская)"]
+        self.curve_combo_var.set(_curve_labels[max(0, min(2, dv["miicam_tone_curve"].get()))])
+        cb_curve = ttk.Combobox(row_curve, textvariable=self.curve_combo_var, values=_curve_labels, state="readonly", width=32)
+        cb_curve.pack(side="left")
+        def _on_curve_cb(event=None):
+            idx = cb_curve.current()
+            if idx >= 0:
+                dv["miicam_tone_curve"].set(idx)
+                self._on_detector_param_changed()
+        cb_curve.bind("<<ComboboxSelected>>", _on_curve_cb)
+
+        row_dm = ttk.Frame(tab_sub_clean)
+        row_dm.pack(fill="x", pady=4)
+        ttk.Label(row_dm, text="Демозаик (DEMOSAIC):", width=24, anchor="w").pack(side="left")
+        self.demosaic_combo_var = tk.StringVar()
+        _dm_labels = ["0: Билинейный (предсказуемый)", "1: VNG", "2: PPG", "3: AHD", "4: Edge Aware"]
+        self.demosaic_combo_var.set(_dm_labels[max(0, min(4, dv["miicam_demosaic"].get()))])
+        cb_dm = ttk.Combobox(row_dm, textvariable=self.demosaic_combo_var, values=_dm_labels, state="readonly", width=32)
+        cb_dm.pack(side="left")
+        def _on_dm_cb(event=None):
+            idx = cb_dm.current()
+            if idx >= 0:
+                dv["miicam_demosaic"].set(idx)
+                self._on_detector_param_changed()
+        cb_dm.bind("<<ComboboxSelected>>", _on_dm_cb)
+
+        _add_slider_row(tab_sub_clean, "Резкость (Sharpening, 0 = выкл.):", dv["miicam_sharpening"], 0, 500, 0)
+
         # 3. INTERACTIVE BEFORE / AFTER IMAGE COMPARISON
         lf_comp = ttk.LabelFrame(tab_detector, text=" 👁️ Интерактивное сравнение: Исходное (Before) ⟷ С настройками (After) ", padding=8)
         lf_comp.pack(fill="both", expand=True, pady=(4, 0))
@@ -1101,6 +1202,47 @@ class SettingsWindow:
         else:
             messagebox.showinfo("Автонастройка экспозиции", "Команда калибровки будет применена при активном подключении RGB-детектора.", parent=self.win)
 
+    def _apply_clean_frame_preset(self):
+        """Выбрать встроенный пресет «Чистый кадр» и сразу отправить его в камеру."""
+        from ..config import CLEAN_FRAME_PRESET_NAME
+        try:
+            self.preset_var.set(CLEAN_FRAME_PRESET_NAME)
+        except Exception:
+            pass
+        self._apply_detector_preset(CLEAN_FRAME_PRESET_NAME, show_message=False)
+        # синхронизировать вспомогательные выпадающие списки с переменными
+        try:
+            self.curve_combo_var.set(["0: Выключена (нейтрально)", "1: Полиномиальная",
+                                      "2: Логарифмическая (заводская)"][int(self.detector_vars["miicam_tone_curve"].get())])
+            self.demosaic_combo_var.set(["0: Билинейный (предсказуемый)", "1: VNG", "2: PPG", "3: AHD",
+                                         "4: Edge Aware"][int(self.detector_vars["miicam_demosaic"].get())])
+        except Exception:
+            pass
+        try:
+            self._on_detector_param_changed(immediate=True)
+        except Exception:
+            pass
+        self._show_clean_frame_report(prefix="Пресет «Чистый кадр» применён.\n\n")
+
+    def _show_clean_frame_report(self, prefix=""):
+        cap = self.current_cap
+        if not cap or not hasattr(cap, "get_clean_frame_report"):
+            messagebox.showinfo("Чистый кадр", prefix + "Камера не подключена: настройки будут применены при подключении.",
+                                parent=self.win)
+            return
+        rep = cap.get_clean_frame_report()
+        lines = []
+        for name, r in rep["options"].items():
+            state = "принято" if r["ok"] else "ОТКЛОНЕНО"
+            rb = "" if r.get("readback") is None else f" (камера сообщает: {r['readback']})"
+            lines.append(f"• {name} = {r['value']} — {state}{rb}")
+        if not lines:
+            lines.append("• опции ещё не отправлялись камере")
+        if rep["warnings"]:
+            lines.append("")
+            lines += [f"⚠ {w}" for w in rep["warnings"]]
+        messagebox.showinfo("Чистый кадр", prefix + "\n".join(lines), parent=self.win)
+
     def _apply_to_sensor_now(self):
         cfg = {k: v.get() for k, v in getattr(self, 'detector_vars', {}).items()}
         if self.current_cap and hasattr(self.current_cap, 'apply_settings_dict'):
@@ -1124,38 +1266,75 @@ class SettingsWindow:
                 self.lbl_exp_ms.config(text=f"{us / 1000.0:.1f} мс")
             self._on_detector_param_changed()
 
-    def _apply_high_fps_preset(self, target_fps=90):
-        if target_fps >= 90:
-            self.detector_vars["miicam_exposure_us"].set(8000)
-            self.detector_vars["miicam_gain"].set(160)
-            self.detector_vars["miicam_speed"].set(2)
-            self.detector_vars["miicam_binning"].set(2)
-            self.detector_vars["miicam_frame_preload"].set(True)
-            self.detector_vars["miicam_thread_priority"].set(2)
-            if hasattr(self, 'speed_combo_var'):
-                self.speed_combo_var.set("2: Максимальная (High / 60-120 FPS)")
-            if hasattr(self, 'binning_combo_var'):
-                self.binning_combo_var.set("2: Биннинг 2x2 (Турбо FPS / Высокая чувств.)")
-        elif target_fps >= 60:
-            self.detector_vars["miicam_exposure_us"].set(16000)
-            self.detector_vars["miicam_gain"].set(120)
-            self.detector_vars["miicam_speed"].set(2)
-            self.detector_vars["miicam_binning"].set(1)
-            self.detector_vars["miicam_frame_preload"].set(True)
-            self.detector_vars["miicam_thread_priority"].set(2)
-            if hasattr(self, 'speed_combo_var'):
-                self.speed_combo_var.set("2: Максимальная (High / 60-120 FPS)")
-            if hasattr(self, 'binning_combo_var'):
-                self.binning_combo_var.set("1: Полное разрешение 1x1")
-        self._on_detector_param_changed()
 
-    def _apply_detector_preset(self, preset_name=None):
+    def _on_preset_scope_changed(self, *args):
+        label = self.preset_scope_label_var.get()
+        if label in getattr(self, "_preset_scope_labels", {}):
+            self.preset_scope_var.set(self._preset_scope_labels[label])
+
+    def _refresh_detector_presets(self, preferred_id=None):
+        records = list(self.project_store.list_presets("detector"))
+        # Old integrations may still mutate config["detector_presets"] directly.
+        # Read these values for compatibility, but never persist them from the
+        # application-managed ProjectStore path.
+        if self._legacy_preset_compat:
+            legacy = self.config.get("detector_presets", {})
+            if isinstance(legacy, dict):
+                known_builtin_names = {r.get("name", "").casefold() for r in records if r.get("locked")}
+                for name, settings in legacy.items():
+                    if (isinstance(settings, dict) and str(name).casefold() not in known_builtin_names
+                            and not any(r.get("name", "").casefold() == str(name).casefold() for r in records)):
+                        records.append({
+                            "id": f"legacy:detector:{name}", "kind": "detector", "name": str(name),
+                            "origin": "user", "locked": False, "settings": settings,
+                        })
+
+        labels = []
+        mapping = {}
+        selected = None
+        for record in records:
+            origin = record.get("origin", "user")
+            label = record.get("name", "Пресет")
+            if origin == "project":
+                label += " · проект"
+            elif origin == "user":
+                label += " · личный"
+            if label in mapping:
+                label += f" · {str(record.get('id', ''))[-6:]}"
+            labels.append(label)
+            mapping[label] = record
+            if record.get("id") == preferred_id:
+                selected = label
+        self._detector_preset_records = records
+        self._detector_preset_by_label = mapping
+        self.cb_detector_presets.configure(values=labels)
+        if selected is None and labels:
+            selected = labels[0]
+        self.preset_var.set(selected or "")
+
+    def _selected_detector_preset(self, preset_name=None):
+        value = preset_name or (self.preset_var.get() if hasattr(self, "preset_var") else "")
+        record = getattr(self, "_detector_preset_by_label", {}).get(value)
+        if record:
+            return record
+        for item in getattr(self, "_detector_preset_records", []):
+            if item.get("name") == value or item.get("id") == value:
+                return item
+        return None
+
+    def _apply_detector_preset(self, preset_name=None, show_message=True):
         name = preset_name or (self.preset_var.get() if hasattr(self, 'preset_var') else None)
-        presets = self.config.get("detector_presets", DEFAULT_DETECTOR_PRESETS)
-        if not name or name not in presets:
+        record = self._selected_detector_preset(name)
+        if record is None and self._legacy_preset_compat:
+            old_settings = self.config.get("detector_presets", {})
+            if isinstance(old_settings, dict) and name in old_settings:
+                record = {"id": f"legacy:detector:{name}", "name": name,
+                          "locked": str(name).casefold() == "по умолчанию (default)".casefold(),
+                          "settings": old_settings[name]}
+        if not record:
             messagebox.showwarning("Пресеты", f"Пресет «{name}» не найден.", parent=self.win)
             return
-        p_data = presets[name]
+        p_data = record.get("settings", {})
         for k, v in p_data.items():
             if k in getattr(self, 'detector_vars', {}):
                 try:
@@ -1180,11 +1359,16 @@ class SettingsWindow:
             s_val = self.detector_vars['miicam_speed'].get()
             self.speed_combo_var.set("2: Максимальная (High / 60-120 FPS)" if s_val == 2 else "1: Средняя" if s_val == 1 else "0: Низкая")
 
+        if record.get("id") and not str(record["id"]).startswith("legacy:"):
+            self._applied_detector_preset_id = record["id"]
         self._on_detector_param_changed()
-        messagebox.showinfo("Пресеты", f"Пресет «{name}» успешно применен!", parent=self.win)
+        if show_message:
+            messagebox.showinfo("Пресеты", f"Пресет «{record.get('name', name)}» успешно применен!", parent=self.win)
 
     def _save_detector_preset(self):
-        name = simpledialog.askstring("Сохранить пресет", "Введите название пресета (например: Бром, Ароматика, Нефть):", parent=self.win)
+        name = simpledialog.askstring(
+            "Сохранить пресет", "Введите название копии пресета:", parent=self.win
+        )
         if not name or not name.strip():
             return
         name = name.strip()
@@ -1194,39 +1378,68 @@ class SettingsWindow:
                 p_data[k] = var.get()
             except Exception:
                 pass
-        if "detector_presets" not in self.config or not isinstance(self.config["detector_presets"], dict):
-            self.config["detector_presets"] = dict(DEFAULT_DETECTOR_PRESETS)
-        self.config["detector_presets"][name] = p_data
-        preset_names = list(self.config["detector_presets"].keys())
-        if hasattr(self, 'cb_detector_presets'):
-            self.cb_detector_presets.config(values=preset_names)
-        if hasattr(self, 'preset_var'):
-            self.preset_var.set(name)
-        messagebox.showinfo("Пресеты", f"Пресет «{name}» успешно сохранен!", parent=self.win)
+        selected = self._selected_detector_preset()
+        scope = self.preset_scope_var.get()
+        try:
+            record = self.project_store.save_preset(
+                "detector", name, p_data, scope=scope,
+                based_on=selected.get("id") if selected else None,
+            )
+        except Exception as exc:
+            messagebox.showerror("Пресеты", str(exc), parent=self.win)
+            return
+        self._applied_detector_preset_id = record["id"]
+        self._refresh_detector_presets(record["id"])
+        messagebox.showinfo(
+            "Пресеты", f"Копия «{name}» сохранена ({'проект' if scope == 'project' else 'личная библиотека'}).",
+            parent=self.win,
+        )
+
+    def _set_detector_preset_default(self):
+        record = self._selected_detector_preset()
+        if not record:
+            return
+        self._pending_default_preset_id = record["id"]
+        if self._applied_detector_preset_id != record["id"]:
+            self._apply_detector_preset(record["id"], show_message=False)
+        messagebox.showinfo(
+            "Пресеты", f"«{record['name']}» будет пресетом по умолчанию после нажатия «Сохранить и применить».",
+            parent=self.win,
+        )
 
     def _delete_detector_preset(self):
         name = self.preset_var.get() if hasattr(self, 'preset_var') else None
-        presets = self.config.get("detector_presets", {})
-        if not name or name not in presets:
+        record = self._selected_detector_preset(name)
+        if not record and self._legacy_preset_compat:
+            legacy = self.config.get("detector_presets", {})
+            if isinstance(legacy, dict) and name in legacy:
+                record = {"id": f"legacy:detector:{name}", "name": name,
+                          "locked": name == "По умолчанию (Default)"}
+        if not name or not record:
             return
-        if name in ("По умолчанию (Default)", "По умолчанию", "Default"):
+        if record.get("locked") or str(record.get("id", "")).startswith("builtin:"):
             messagebox.showwarning(
-                "Защита пресета",
-                "Пресет «По умолчанию (Default)» защищен от удаления и является базовым эталоном.",
+                "Защита пресета", "Встроенный пресет защищен от изменения и удаления. Сохраните его копию под другим именем.",
                 parent=self.win
             )
             return
-        if messagebox.askyesno("Удаление пресета", f"Вы уверены, что хотите удалить пресет «{name}»?", parent=self.win):
-            del self.config["detector_presets"][name]
-            preset_names = list(self.config["detector_presets"].keys())
-            if not preset_names:
-                self.config["detector_presets"] = dict(DEFAULT_DETECTOR_PRESETS)
-                preset_names = list(self.config["detector_presets"].keys())
-            if hasattr(self, 'cb_detector_presets'):
-                self.cb_detector_presets.config(values=preset_names)
-            if hasattr(self, 'preset_var'):
-                self.preset_var.set(preset_names[0])
-            messagebox.showinfo("Пресеты", f"Пресет «{name}» удален.", parent=self.win)
+        if not messagebox.askyesno("Удаление пресета", f"Удалить пресет «{record.get('name', name)}»?", parent=self.win):
+            return
+        try:
+            if str(record.get("id", "")).startswith("legacy:") and self._legacy_preset_compat:
+                self.config.get("detector_presets", {}).pop(record.get("name"), None)
+            else:
+                self.project_store.delete_preset(record["id"])
+        except Exception as exc:
+            messagebox.showerror("Пресеты", str(exc), parent=self.win)
+            return
+        default_id = self.project_store.get_default_preset_id("detector")
+        if record.get("id") == self._applied_detector_preset_id:
+            self._applied_detector_preset_id = default_id
+        if record.get("id") == self._pending_default_preset_id:
+            self._pending_default_preset_id = None
+        self._refresh_detector_presets(default_id)
+        messagebox.showinfo("Пресеты", f"Пресет «{record.get('name', name)}» удален.", parent=self.win)
 
     def _capture_new_baseline(self):
         """Зафиксировать чистый эталонный кадр (Raw Baseline) для левой половины сравнения."""
@@ -1472,8 +1685,6 @@ class SettingsWindow:
                         pass
         self._on_detector_param_changed()
 
-    def _reset_color_defaults(self):
-        self._set_color_profile(sat=165, contrast=15, brightness=0, gamma=100)
 
     def _reset_detector_defaults(self):
         defaults = dict(DEFAULT_DETECTOR_PRESETS.get("По умолчанию (Default)", {}))
@@ -1701,7 +1912,7 @@ class SettingsWindow:
                 win = f"{t_min_m:.1f} - {t_max_m:.1f} мин" if t_max > 0 else f"от {t_min_m:.1f} мин (до конца)"
             else:
                 win = f"{t_min:g} - {t_max:g} с" if t_max > 0 else f"от {t_min:g} с (до конца)"
-            color = rule.get("color", "#85E889")
+            color = rule.get("color", get_palette(bool(self.config.get("light_theme", False)))["success"])
             sound = "🔊 Да" if rule.get("sound", True) else "Нет"
             self.custom_marks_tree.insert("", "end", iid=str(idx), values=(status, name, cond, win, color, sound))
 
@@ -1749,9 +1960,10 @@ class SettingsWindow:
         dlg.grab_set()
 
         light = bool(self.config.get("light_theme", False))
-        bg = "#F2F3F8" if light else "#0E121B"
-        panel = "#FFFFFF" if light else "#111827"
-        fg = "#0E121B" if light else "#FFFFFF"
+        colors = get_palette(light)
+        bg = colors['background']
+        panel = colors['surface']
+        fg = colors['text']
         dlg.configure(bg=bg)
 
         frm = ttk.Frame(dlg, padding=16)
@@ -1764,7 +1976,7 @@ class SettingsWindow:
         name_var = tk.StringVar(value=rule.get("name", "Пользовательская метка"))
         ttk.Entry(r0, textvariable=name_var).pack(side="left", fill="x", expand=True, padx=(0, 10))
 
-        color_var = tk.StringVar(value=rule.get("color", "#85E889"))
+        color_var = tk.StringVar(value=rule.get("color", get_palette(bool(self.config.get("light_theme", False)))["success"]))
         color_preview = tk.Canvas(r0, width=24, height=22, bg=color_var.get(), highlightthickness=1)
         color_preview.pack(side="left", padx=(0, 6))
 
@@ -2041,7 +2253,7 @@ class SettingsWindow:
                 "t_max_sec": t_max_sec,
                 "cooldown_enabled": bool(cooldown_enabled_var.get()),
                 "cooldown_sec": cooldown_sec,
-                "color": color_var.get().strip() or "#85E889",
+                "color": color_var.get().strip() or get_palette(bool(self.config.get("light_theme", False)))["success"],
                 "sound": bool(sound_var.get()),
                 "notify": bool(notify_var.get()),
             }
@@ -2091,12 +2303,12 @@ class SettingsWindow:
             return
         self.custom_graph_list.delete(0, tk.END)
         for g in self._custom_graphs:
-            self.custom_graph_list.insert(tk.END, f"  📈 {g.get('name', 'График')}: {g.get('formula', '')} [{g.get('color', '#00FFCC')}]")
+            self.custom_graph_list.insert(tk.END, f"  📈 {g.get('name', 'График')}: {g.get('formula', '')} [{g.get('color', get_palette(bool(self.config.get('light_theme', False)))['accent'])}]")
 
     def _add_custom_graph(self):
         name = self.custom_name_var.get().strip()
         formula = self.custom_formula_var.get().strip()
-        color = self.custom_color_var.get().strip() or "#00FFCC"
+        color = self.custom_color_var.get().strip() or get_palette(bool(self.config.get("light_theme", False)))["accent"]
         if not name or not formula:
             messagebox.showwarning("Графики", "Укажите название и формулу графика.", parent=self.win)
             return
@@ -2121,15 +2333,16 @@ class SettingsWindow:
         dlg.grab_set()
 
         light = bool(self.config.get("light_theme", False))
-        bg = "#F2F3F8" if light else "#0E121B"
-        panel = "#FFFFFF" if light else "#111827"
-        fg = "#0E121B" if light else "#FFFFFF"
+        colors = get_palette(light)
+        bg = colors['background']
+        panel = colors['surface']
+        fg = colors['text']
         dlg.configure(bg=bg)
 
         outer = ttk.Frame(dlg, padding=16)
         outer.pack(fill="both", expand=True)
 
-        ttk.Label(outer, text="📚 Инструкция по созданию формул и графиков", font=("Segoe UI", 13, "bold"), foreground="#3B82F6").pack(anchor="w", pady=(0, 8))
+        ttk.Label(outer, text="📚 Инструкция по созданию формул и графиков", font=("Segoe UI", 13, "bold"), foreground=get_palette(light)["accent"]).pack(anchor="w", pady=(0, 8))
 
         txt = tk.Text(outer, wrap="word", bg=panel, fg=fg, font=("Segoe UI", 9), relief="solid", borderwidth=1, padx=12, pady=10)
         scroll = ttk.Scrollbar(outer, orient="vertical", command=txt.yview)
@@ -2253,10 +2466,19 @@ class SettingsWindow:
             "custom_variables": list(getattr(self, "_custom_variables", [])),
             "custom_graphs": list(getattr(self, "_custom_graphs", [])),
             "custom_auto_marks": list(getattr(self, "_custom_auto_marks", [])),
-            "detector_presets": dict(self.config.get("detector_presets", DEFAULT_DETECTOR_PRESETS)),
+            "active_detector_preset_id": (
+                self._applied_detector_preset_id or self.config.get("active_detector_preset_id")
+            ),
             "player_hud_metrics": list(self.config.get("player_hud_metrics", DEFAULT_PLAYER_HUD_METRICS)),
         }
         self.config.update(values)
+        if not self._legacy_preset_compat:
+            self.config.pop("detector_presets", None)
+        if self._pending_default_preset_id:
+            try:
+                self.project_store.set_default_preset("detector", self._pending_default_preset_id)
+            except Exception as e:
+                messagebox.showwarning("Пресеты", f"Не удалось назначить пресет по умолчанию:\n{e}", parent=self.win)
         try:
             save_settings(values)
         except Exception as e:

@@ -2,13 +2,10 @@ import os
 import cv2
 import numpy as np
 import time
-import socket
 import subprocess
-import threading
 import re
 
-from ..config import LOW_LATENCY_FFMPEG_OPTIONS, get_default_save_folder
-from .ffmpeg_utils import find_ffmpeg_exe, ffmpeg_missing_message
+from .ffmpeg_utils import find_ffmpeg_exe
 
                                                                  
 VIDEO_FILE_EXTENSIONS = {
@@ -41,22 +38,6 @@ def is_video_file_source(source):
         return os.path.isfile(value) and os.path.splitext(value)[1].lower() in VIDEO_FILE_EXTENSIONS
     except Exception:
         return False
-
-
-def is_network_source(source):
-    if not source:
-        return False
-    source_str = str(source).strip().strip('"').strip("'").lower()
-    return source_str.startswith(("rtsp://", "http://", "https://"))
-
-
-def is_rtsp_source(source):
-    if not source:
-        return False
-    return str(source).strip().strip('"').strip("'").lower().startswith("rtsp://")
-
-def apply_low_latency_ffmpeg_options():
-    os.environ["OPENCV_FFMPEG_CAPTURE_OPTIONS"] = LOW_LATENCY_FFMPEG_OPTIONS
 
 
 def get_short_path_name(path):
@@ -442,10 +423,6 @@ def open_camera_device(index, width=None, height=None, max_attempts=15):
 
 
 def create_video_capture(source, width=None, height=None):
-    try:
-        from ..analysis import ffmpeg_capture
-    except ImportError:
-        from src.analysis import ffmpeg_capture
     source_str = str(source).strip().strip('"').strip("'")
 
     if is_miicam_source(source_str):
@@ -457,11 +434,6 @@ def create_video_capture(source, width=None, height=None):
             return None
     elif is_video_file_source(source_str) or is_video_file_path(source_str):
         return open_video_file_capture(source_str)
-    elif is_rtsp_source(source_str):
-        return ffmpeg_capture.FFMpegLatestFrameCapture(source_str, width=width, height=height)
-    elif is_network_source(source_str):
-        apply_low_latency_ffmpeg_options()
-        return cv2.VideoCapture(source_str, cv2.CAP_FFMPEG)
     else:
         try:
             index = int(source_str)
@@ -665,53 +637,6 @@ def scan_cameras(max_index=6):
         pass
     return available
 
-def get_local_ip():
-    try:
-        s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
-        s.connect(("8.8.8.8", 80))
-        ip = s.getsockname()[0]
-        s.close()
-        return ip
-    except:
-        return "192.168.1.1"
-
-def scan_ip_cameras():
-    found = []
-    local_ip = get_local_ip()
-    subnet = '.'.join(local_ip.split('.')[:3])
-    ports = [8080, 80, 554, 4747, 7070]
-    print(f"📱 Сканирование сети {subnet}.x...")
-    
-    def check_host(ip, port):
-        try:
-            sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-            sock.settimeout(0.3)
-            result = sock.connect_ex((ip, port))
-            sock.close()
-            if result == 0:
-                url = f"http://{ip}:{port}/video"
-                test_cap = cv2.VideoCapture(url)
-                if test_cap.isOpened():
-                    ret, _ = test_cap.read()
-                    test_cap.release()
-                    if ret:
-                        found.append((url, f"IP Camera: {ip}:{port}"))
-                        print(f"✅ Найдена IP-камера: {ip}:{port}")
-        except:
-            pass
-    
-    threads = []
-    for i in range(1, 50):
-        ip = f"{subnet}.{i}"
-        for port in ports:
-            t = threading.Thread(target=check_host, args=(ip, port))
-            t.start()
-            threads.append(t)
-    
-    for t in threads:
-        t.join()
-    
-    return found
 
 def ivcam_setup_hint():
     return (

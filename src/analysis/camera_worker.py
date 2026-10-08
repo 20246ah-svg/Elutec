@@ -13,12 +13,15 @@ from ..utils.math_utils import (
 from ..utils.helpers import compute_roi_means
 from ..data.csv_logger import CsvLogger                
 from ..config import (
-    RGB_SUM_SMOOTH_WINDOW_MS, RATE_MIN_POINTS,
-    RGB_SUM_SLOPE_FAST_MS, RGB_SUM_SLOPE_SLOW_MS, RGB_SUM_SLOPE_MIN_POINTS,
-    RGB_VECTOR_WINDOW_MS, CHROMATICITY_WINDOW_MS, LOG_RATIO_WINDOW_MS,
-    RGB_SUM_ACCEL_WINDOW_MS, CHROM_BASELINE_LOOKBACK_MS, CHROM_BASELINE_GAP_MS,
-    CHROM_BASELINE_MIN_POINTS,
-    EMA_FAST_TAU_MS, EMA_SLOW_TAU_MS
+    RGB_SUM_SMOOTH_WINDOW_MS,
+    RATE_MIN_POINTS,
+    RGB_SUM_SLOPE_FAST_MS,
+    RGB_SUM_SLOPE_SLOW_MS,
+    RGB_SUM_SLOPE_MIN_POINTS,
+    RGB_VECTOR_WINDOW_MS,
+    CHROMATICITY_WINDOW_MS,
+    LOG_RATIO_WINDOW_MS,
+    RGB_SUM_ACCEL_WINDOW_MS,
 )
 
 class CameraWorker:
@@ -358,12 +361,6 @@ class CameraWorker:
             self.is_paused = not self.is_paused
             return self.is_paused
 
-    def set_paused(self, paused):
-        with self._lock:
-            if not paused and not self.is_analysis_started:
-                self.is_analysis_started = True
-            self.is_paused = bool(paused)
-            return self.is_paused
 
     def set_speed(self, speed):
         with self._lock:
@@ -458,29 +455,6 @@ class CameraWorker:
         if self.csv_logger:
             self.csv_logger.close()
 
-    def _update_fastslow(self, key, time_ms, value):
-        try:
-            v = float(value)
-            if not np.isfinite(v):
-                return float('nan')
-            state = self._ema_state.get(key)
-            if state is None:
-                self._ema_state[key] = {'fast': v, 'slow': v, 'last_t': float(time_ms)}
-                return 0.0
-
-            dt_ms = max(0.0, float(time_ms) - float(state.get('last_t', time_ms)))
-            dt_s = dt_ms / 1000.0
-            tau_fast_s = max(0.001, EMA_FAST_TAU_MS / 1000.0)
-            tau_slow_s = max(0.001, EMA_SLOW_TAU_MS / 1000.0)
-            alpha_fast = 1.0 - float(np.exp(-dt_s / tau_fast_s))
-            alpha_slow = 1.0 - float(np.exp(-dt_s / tau_slow_s))
-
-            state['fast'] = state['fast'] + alpha_fast * (v - state['fast'])
-            state['slow'] = state['slow'] + alpha_slow * (v - state['slow'])
-            state['last_t'] = float(time_ms)
-            return float(state['fast'] - state['slow'])
-        except Exception:
-            return float('nan')
 
     def _loop(self):
         while self._running:

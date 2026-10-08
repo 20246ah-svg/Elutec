@@ -1,24 +1,26 @@
-import json
 import time
 import numpy as np
 import cv2
 import os
 import traceback
-from typing import Optional
 from PIL import Image, ImageDraw, ImageFont
 
 from ..gui.live_graph import LiveGraphWindow
 from ..analysis.camera_worker import CameraWorker
 from ..analysis.video_recorder import AsyncVideoRecorder
-from ..data.excel_exporter import create_session_excel, save_to_excel, save_annotations_to_workbook
-from ..data.csv_logger import CsvLogger
+from ..data.excel_exporter import create_session_excel, save_to_excel, save_annotations_to_workbook, save_graph_to_image
 from ..utils.helpers import (
-    create_video_capture, warmup_capture, read_valid_frame,
-    is_network_source, is_placeholder_frame, is_video_file_source,
-    is_video_file_path, ivcam_setup_hint, detect_green_circle_roi,
-    repair_video_file_if_needed, compute_roi_means
+    compute_roi_means,  # публичный реэкспорт: закреплён тестом test_runner_compute_roi_means_importable
+    create_video_capture,
+    warmup_capture,
+    read_valid_frame,
+    is_placeholder_frame,
+    is_video_file_source,
+    is_video_file_path,
+    ivcam_setup_hint,
+    detect_green_circle_roi,
+    repair_video_file_if_needed,
 )
-from ..utils.ffmpeg_utils import find_ffmpeg_exe
 from ..config import FFMPEG_PIPE_OUTPUT_FPS, MAX_POINTS, DEFAULT_PLAYER_HUD_METRICS
 
 
@@ -221,7 +223,7 @@ def run_analysis(config, parent=None, cap=None):
     if cap is None:
         cap = create_video_capture(source_clean)
         if cap is not None and cap.isOpened() and not is_file:
-            warmup_capture(cap, frames=2 if is_network_source(source_clean) else 8)
+            warmup_capture(cap, frames=8)
 
     # Применение параметров сенсора (выдержка, gain, wb) для MiiCam RGB-детектора
     if cap is not None and hasattr(cap, 'apply_settings_dict'):
@@ -262,7 +264,7 @@ def run_analysis(config, parent=None, cap=None):
                 if ret:
                     source_clean = repaired
                     config['source'] = repaired
-    elif not ret and not is_file and not is_network_source(source_clean):
+    elif not ret and not is_file:
         if cap is not None:
             try:
                 cap.release()
@@ -303,7 +305,7 @@ def run_analysis(config, parent=None, cap=None):
             messagebox.showerror("Ошибка", msg, parent=parent)
         return
 
-    if (not is_network_source(source) and not config.get('source_is_file')) and is_placeholder_frame(test_frame):
+    if not config.get('source_is_file') and is_placeholder_frame(test_frame):
         msg = (
             "Видеопоток не активен (чёрный экран).\n\n"
             + ivcam_setup_hint()
@@ -1567,6 +1569,7 @@ def run_analysis(config, parent=None, cap=None):
             saved_data = list(camera_worker.snapshot(copy_frame=False)['saved_data'])
         excel_path = None
         graph_path = None
+        graph_error = None
         annotations_path = None
         save_error = None
         ann_count = 0
@@ -1600,6 +1603,18 @@ def run_analysis(config, parent=None, cap=None):
                 save_error = f"Excel: {e}\n{traceback.format_exc()}"
                 print(f"❌ Ошибка сохранения Excel: {e}")
                 traceback.print_exc()
+
+            # PNG is a convenience export only; never let Matplotlib or a
+            # filesystem error prevent the analysis result from being returned.
+            try:
+                graph_folder = config.get("exports_folder") or os.path.join(save_folder, "exports")
+                os.makedirs(graph_folder, exist_ok=True)
+                source_excel = excel_path or session_excel_path
+                graph_base = os.path.splitext(os.path.basename(source_excel or "analysis"))[0]
+                graph_path = save_graph_to_image(graph_folder, saved_data, graph_base)
+            except Exception as e:
+                graph_error = str(e)
+                print(f"⚠️ Не удалось экспортировать PNG-график: {e}")
 
         if video_recorder is not None:
             try:
@@ -1642,6 +1657,9 @@ def run_analysis(config, parent=None, cap=None):
         return {
             'saved_data': saved_data,
             'excel_path': excel_path,
+            'session_excel_path': session_excel_path,
+            'graph_path': graph_path,
+            'graph_error': graph_error,
             'raw_csv_path': raw_csv_path,
             'video_saved_path': video_saved_path,
             'save_error': save_error,

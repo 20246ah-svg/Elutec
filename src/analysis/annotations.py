@@ -112,15 +112,5 @@ class AnnotationManager:
         self.annotations = []
         self._color_index = 0
     
-    def to_dict_list(self):
-        return [a.to_dict() for a in self.annotations]
     
-    @classmethod
-    def from_dict_list(cls, data_list):
-        manager = cls()
-        for data in data_list:
-            ann = Annotation.from_dict(data)
-            manager.annotations.append(ann)
-        manager.annotations.sort(key=lambda a: a.time_ms)
-        return manager
 
