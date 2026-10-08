@@ -6,8 +6,8 @@ from collections import deque
 
 from ..utils.math_utils import (
     compute_log_br, compute_log_bg, compute_rgb_triangle,
-    compute_window_mean, compute_window_rate,
-    compute_chrom_distance_from_previous_state,
+    compute_window_mean_with_current, compute_window_rate_with_current,
+    compute_chrom_distance_from_previous_state_with_current,
     compute_transition_score
 )
 from ..utils.helpers import compute_roi_means
@@ -18,11 +18,11 @@ from ..config import (
     RGB_VECTOR_WINDOW_MS, CHROMATICITY_WINDOW_MS, LOG_RATIO_WINDOW_MS,
     RGB_SUM_ACCEL_WINDOW_MS, CHROM_BASELINE_LOOKBACK_MS, CHROM_BASELINE_GAP_MS,
     CHROM_BASELINE_MIN_POINTS,
-    EMA_FAST_TAU_MS, EMA_SLOW_TAU_MS
+    EMA_FAST_TAU_MS, EMA_SLOW_TAU_MS, MAX_POINTS
 )
 
 class CameraWorker:
-    def __init__(self, cap, config, start_time, save_interval_ms=10, max_points=108000, raw_csv_path=None):
+    def __init__(self, cap, config, start_time, save_interval_ms=10, max_points=MAX_POINTS, raw_csv_path=None):
         self.cap = cap
         self.config = config
         self.start_time = start_time
@@ -31,35 +31,45 @@ class CameraWorker:
         self._running = False
         self._thread = None
 
-        self.time_data = deque(maxlen=max_points)
-        self.r_data = deque(maxlen=max_points)
-        self.g_data = deque(maxlen=max_points)
-        self.b_data = deque(maxlen=max_points)
-        self.log_data = deque(maxlen=max_points)
-        self.log_bg_data = deque(maxlen=max_points)
-        self.rgb_sum_data = deque(maxlen=max_points)
-        self.rgb_sum_smooth_data = deque(maxlen=max_points)
-        self.rgb_sum_slope10_data = deque(maxlen=max_points)
-        self.rgb_sum_slope30_data = deque(maxlen=max_points)
-        self.tri_x_data = deque(maxlen=max_points)
-        self.tri_y_data = deque(maxlen=max_points)
-        self.rgb_vector_speed30_data = deque(maxlen=max_points)
-        self.chromaticity_speed30_data = deque(maxlen=max_points)
-        self.k_chrom_previous_data = deque(maxlen=max_points)
-        self.log_ratio_speed30_data = deque(maxlen=max_points)
-        self.rgb_sum_acceleration30_data = deque(maxlen=max_points)
-        self.transition_score_data = deque(maxlen=max_points)
-        self.rate_b_data = deque(maxlen=max_points)
-        self.rate_r_data = deque(maxlen=max_points)
-        self.rate_g_data = deque(maxlen=max_points)
-        self.rate_log_data = deque(maxlen=max_points)
-        self.rate_log_bg_data = deque(maxlen=max_points)
-        self.fastslow_log_data = deque(maxlen=max_points)
-        self.fastslow_log_bg_data = deque(maxlen=max_points)
+        self.max_points = max(1, int(max_points))
+        self._graph_compaction_margin = max(256, self.max_points // 10)
+        self._graph_capacity_limit = self.max_points + self._graph_compaction_margin
+        self.time_data = deque(maxlen=self.max_points)
+        self.r_data = deque(maxlen=self.max_points)
+        self.g_data = deque(maxlen=self.max_points)
+        self.b_data = deque(maxlen=self.max_points)
+        self.log_data = deque(maxlen=self.max_points)
+        self.log_bg_data = deque(maxlen=self.max_points)
+        self.rgb_sum_data = deque(maxlen=self.max_points)
+        self.rgb_sum_smooth_data = deque(maxlen=self.max_points)
+        self.rgb_sum_slope10_data = deque(maxlen=self.max_points)
+        self.rgb_sum_slope30_data = deque(maxlen=self.max_points)
+        self.tri_x_data = deque(maxlen=self.max_points)
+        self.tri_y_data = deque(maxlen=self.max_points)
+        self.rgb_vector_speed30_data = deque(maxlen=self.max_points)
+        self.chromaticity_speed30_data = deque(maxlen=self.max_points)
+        self.k_chrom_previous_data = deque(maxlen=self.max_points)
+        self.log_ratio_speed30_data = deque(maxlen=self.max_points)
+        self.rgb_sum_acceleration30_data = deque(maxlen=self.max_points)
+        self.transition_score_data = deque(maxlen=self.max_points)
+        self.rate_b_data = deque(maxlen=self.max_points)
+        self.rate_r_data = deque(maxlen=self.max_points)
+        self.rate_g_data = deque(maxlen=self.max_points)
+        self.rate_log_data = deque(maxlen=self.max_points)
+        self.rate_log_bg_data = deque(maxlen=self.max_points)
+        self.fastslow_log_data = deque(maxlen=self.max_points)
+        self.fastslow_log_bg_data = deque(maxlen=self.max_points)
         self._ema_state = {}
         self.saved_data = []
         self.last_save_ms = 0
         self.frame_count = 0
+        self._processing_durations_ms = deque(maxlen=512)
+        self._processing_sample_count = 0
+        self._processing_total_ms = 0.0
+        self._processing_max_ms = 0.0
+        self._processing_overrun_count = 0
+        self._frame_width = None
+        self._frame_height = None
         self.graph_version = 0
         self._graph_len = 0
         self._graph_t = np.empty(0, dtype=np.float64)
@@ -126,6 +136,7 @@ class CameraWorker:
                         frame_init, self.config
                     )
                     self.latest_frame = frame_init
+                    self._frame_height, self._frame_width = frame_init.shape[:2]
                     self.current_means = (mean_b, mean_g, mean_r)
                     self.roi_info = (safe_x, safe_y, safe_w, safe_h, h_f, w_f)
                     self._file_frame_index = 0
@@ -245,7 +256,7 @@ class CameraWorker:
         # Синхронизируем массивы графиков
         if keep_count > 0:
             if len(self._graph_t) < keep_count:
-                alloc_size = max(keep_count * 2, int(self.config.get('max_points', 108000)))
+                alloc_size = max(keep_count * 2, int(self.config.get('max_points', MAX_POINTS)))
                 self._graph_t = np.empty(alloc_size, dtype=np.float64)
                 self._graph_r = np.empty(alloc_size, dtype=np.float64)
                 self._graph_g = np.empty(alloc_size, dtype=np.float64)
@@ -400,13 +411,38 @@ class CameraWorker:
                 target_frame = max(0, min(target_frame, self.total_frames - 1))
             self._seek_target_frame = target_frame
 
+    def _compact_graph_history(self):
+        """Keep graph buffers bounded without dropping rows from saved_data/CSV."""
+        keep_count = min(self.max_points, self._graph_len)
+        if keep_count <= 0 or keep_count == self._graph_len:
+            return
+        start = self._graph_len - keep_count
+        capacity = max(keep_count, min(self._graph_capacity_limit, len(self._graph_t)))
+        array_names = (
+            "_graph_t", "_graph_r", "_graph_g", "_graph_b", "_graph_log", "_graph_log_bg",
+            "_graph_rgb_sum", "_graph_rgb_sum_smooth", "_graph_rgb_sum_slope10",
+            "_graph_rgb_sum_slope30", "_graph_rgb_vector_speed30", "_graph_chromaticity_speed30",
+            "_graph_k_chrom_previous", "_graph_log_ratio_speed30", "_graph_rgb_sum_acceleration30",
+            "_graph_transition_score", "_graph_tri_x", "_graph_tri_y",
+        )
+        old_length = self._graph_len
+        for name in array_names:
+            old_array = getattr(self, name)
+            compacted = np.empty(capacity, dtype=np.float64)
+            compacted[:keep_count] = old_array[start:old_length]
+            setattr(self, name, compacted)
+        self._graph_len = keep_count
+
     def _append_graph_point(self, t, r, g, b, log_v, log_bg_v, tri_x, tri_y,
                             rgb_sum, rgb_sum_smooth, rgb_sum_slope10, rgb_sum_slope30,
                             rgb_vector_speed30, chromaticity_speed30, k_chrom_previous,
                             log_ratio_speed30, rgb_sum_acceleration30, transition_score):
+        if self._graph_len >= self._graph_capacity_limit:
+            self._compact_graph_history()
         n = self._graph_len + 1
         if n > len(self._graph_t):
-            new_cap = max(n, len(self._graph_t) * 2 if len(self._graph_t) else 4096)
+            preferred_cap = len(self._graph_t) * 2 if len(self._graph_t) else 4096
+            new_cap = max(n, min(self._graph_capacity_limit, preferred_cap))
             self._graph_t = np.resize(self._graph_t, new_cap)
             self._graph_r = np.resize(self._graph_r, new_cap)
             self._graph_g = np.resize(self._graph_g, new_cap)
@@ -597,6 +633,7 @@ class CameraWorker:
                 if self.source_is_file and self.time_data and elapsed_ms < self.time_data[-1]:
                     self._truncate_data_to_time(elapsed_ms)
                 self.latest_frame = frame
+                self._frame_height, self._frame_width = frame.shape[:2]
                 self.current_means = (mean_b, mean_g, mean_r)
                 self.roi_info = (safe_x, safe_y, safe_w, safe_h, h_f, w_f)
                 self.frame_count += 1
@@ -627,51 +664,82 @@ class CameraWorker:
                     self.log_data.append(log_br)
                     self.log_bg_data.append(log_bg)
                     self.rgb_sum_data.append(rgb_sum)
-                    rgb_sum_smooth = compute_window_mean(
-                        self.time_data, self.rgb_sum_data,
-                        window_ms=RGB_SUM_SMOOTH_WINDOW_MS, min_points=RATE_MIN_POINTS
+                    # Reuse the contiguous NumPy history already maintained for
+                    # the live graphs. Binary-searching its time axis and slicing
+                    # the active window avoids rebuilding whole Python deques for
+                    # every channel and every new measurement.
+                    history_times = self._graph_t[:self._graph_len]
+                    history_start_index = max(0, self._graph_len - max(0, len(self.time_data) - 1))
+                    rgb_sum_smooth = compute_window_mean_with_current(
+                        history_times, self._graph_rgb_sum[:self._graph_len], rounded_ms, rgb_sum,
+                        window_ms=RGB_SUM_SMOOTH_WINDOW_MS, history_start_index=history_start_index
                     )
                     self.rgb_sum_smooth_data.append(rgb_sum_smooth)
-                    rgb_sum_slope10 = compute_window_rate(
-                        self.time_data, self.rgb_sum_smooth_data,
-                        window_ms=RGB_SUM_SLOPE_FAST_MS, min_points=RGB_SUM_SLOPE_MIN_POINTS
+                    rgb_sum_slope10 = compute_window_rate_with_current(
+                        history_times, self._graph_rgb_sum_smooth[:self._graph_len], rounded_ms, rgb_sum_smooth,
+                        window_ms=RGB_SUM_SLOPE_FAST_MS, history_start_index=history_start_index
                     )
-                    rgb_sum_slope30 = compute_window_rate(
-                        self.time_data, self.rgb_sum_smooth_data,
-                        window_ms=RGB_SUM_SLOPE_SLOW_MS, min_points=RGB_SUM_SLOPE_MIN_POINTS
+                    rgb_sum_slope30 = compute_window_rate_with_current(
+                        history_times, self._graph_rgb_sum_smooth[:self._graph_len], rounded_ms, rgb_sum_smooth,
+                        window_ms=RGB_SUM_SLOPE_SLOW_MS, history_start_index=history_start_index
                     )
                     self.rgb_sum_slope10_data.append(rgb_sum_slope10)
                     self.rgb_sum_slope30_data.append(rgb_sum_slope30)
                     self.tri_x_data.append(tri_x)
                     self.tri_y_data.append(tri_y)
 
-                    r_slope30 = compute_window_rate(self.time_data, self.r_data, window_ms=RGB_VECTOR_WINDOW_MS, min_points=RGB_SUM_SLOPE_MIN_POINTS)
-                    g_slope30 = compute_window_rate(self.time_data, self.g_data, window_ms=RGB_VECTOR_WINDOW_MS, min_points=RGB_SUM_SLOPE_MIN_POINTS)
-                    b_slope30 = compute_window_rate(self.time_data, self.b_data, window_ms=RGB_VECTOR_WINDOW_MS, min_points=RGB_SUM_SLOPE_MIN_POINTS)
+                    r_slope30 = compute_window_rate_with_current(
+                        history_times, self._graph_r[:self._graph_len], rounded_ms, mean_r,
+                        window_ms=RGB_VECTOR_WINDOW_MS, history_start_index=history_start_index
+                    )
+                    g_slope30 = compute_window_rate_with_current(
+                        history_times, self._graph_g[:self._graph_len], rounded_ms, mean_g,
+                        window_ms=RGB_VECTOR_WINDOW_MS, history_start_index=history_start_index
+                    )
+                    b_slope30 = compute_window_rate_with_current(
+                        history_times, self._graph_b[:self._graph_len], rounded_ms, mean_b,
+                        window_ms=RGB_VECTOR_WINDOW_MS, history_start_index=history_start_index
+                    )
                     if np.isfinite(r_slope30) and np.isfinite(g_slope30) and np.isfinite(b_slope30):
                         rgb_vector_speed30 = float(np.sqrt(r_slope30 ** 2 + g_slope30 ** 2 + b_slope30 ** 2))
                     else:
                         rgb_vector_speed30 = float('nan')
 
-                    tri_x_slope30 = compute_window_rate(self.time_data, self.tri_x_data, window_ms=CHROMATICITY_WINDOW_MS, min_points=RGB_SUM_SLOPE_MIN_POINTS)
-                    tri_y_slope30 = compute_window_rate(self.time_data, self.tri_y_data, window_ms=CHROMATICITY_WINDOW_MS, min_points=RGB_SUM_SLOPE_MIN_POINTS)
+                    tri_x_slope30 = compute_window_rate_with_current(
+                        history_times, self._graph_tri_x[:self._graph_len], rounded_ms, tri_x,
+                        window_ms=CHROMATICITY_WINDOW_MS, history_start_index=history_start_index
+                    )
+                    tri_y_slope30 = compute_window_rate_with_current(
+                        history_times, self._graph_tri_y[:self._graph_len], rounded_ms, tri_y,
+                        window_ms=CHROMATICITY_WINDOW_MS, history_start_index=history_start_index
+                    )
                     if np.isfinite(tri_x_slope30) and np.isfinite(tri_y_slope30):
                         chromaticity_speed30 = float(np.sqrt(tri_x_slope30 ** 2 + tri_y_slope30 ** 2))
                     else:
                         chromaticity_speed30 = float('nan')
 
-                    k_chrom_previous = compute_chrom_distance_from_previous_state(self.time_data, self.tri_x_data, self.tri_y_data)
+                    k_chrom_previous = compute_chrom_distance_from_previous_state_with_current(
+                        history_times, self._graph_tri_x[:self._graph_len],
+                        self._graph_tri_y[:self._graph_len], rounded_ms, tri_x, tri_y,
+                        history_start_index=history_start_index
+                    )
 
-                    log_br_slope30 = compute_window_rate(self.time_data, self.log_data, window_ms=LOG_RATIO_WINDOW_MS, min_points=RGB_SUM_SLOPE_MIN_POINTS)
-                    log_bg_slope30 = compute_window_rate(self.time_data, self.log_bg_data, window_ms=LOG_RATIO_WINDOW_MS, min_points=RGB_SUM_SLOPE_MIN_POINTS)
+                    log_br_slope30 = compute_window_rate_with_current(
+                        history_times, self._graph_log[:self._graph_len], rounded_ms, log_br,
+                        window_ms=LOG_RATIO_WINDOW_MS, history_start_index=history_start_index
+                    )
+                    log_bg_slope30 = compute_window_rate_with_current(
+                        history_times, self._graph_log_bg[:self._graph_len], rounded_ms, log_bg,
+                        window_ms=LOG_RATIO_WINDOW_MS, history_start_index=history_start_index
+                    )
                     if np.isfinite(log_br_slope30) and np.isfinite(log_bg_slope30):
                         log_ratio_speed30 = float(np.sqrt(log_br_slope30 ** 2 + log_bg_slope30 ** 2))
                     else:
                         log_ratio_speed30 = float('nan')
 
-                    rgb_sum_acceleration30 = compute_window_rate(
-                        self.time_data, self.rgb_sum_slope30_data,
-                        window_ms=RGB_SUM_ACCEL_WINDOW_MS, min_points=RGB_SUM_SLOPE_MIN_POINTS
+                    rgb_sum_acceleration30 = compute_window_rate_with_current(
+                        history_times, self._graph_rgb_sum_slope30[:self._graph_len], rounded_ms, rgb_sum_slope30,
+                        window_ms=RGB_SUM_ACCEL_WINDOW_MS, history_start_index=history_start_index
                     )
                     transition_score = compute_transition_score(
                         rgb_vector_speed30, chromaticity_speed30, rgb_sum_slope30,
@@ -710,33 +778,76 @@ class CameraWorker:
                 step = max(1, int(self.playback_speed / 2.0)) if self.playback_speed >= 3.0 else 1
                 target_ms = (1000.0 * step) / (self._file_fps * max(0.05, self.playback_speed))
             spent_ms = (time.perf_counter() - loop_started) * 1000.0
+            with self._lock:
+                self._processing_durations_ms.append(spent_ms)
+                self._processing_sample_count += 1
+                self._processing_total_ms += spent_ms
+                self._processing_max_ms = max(self._processing_max_ms, spent_ms)
+                if spent_ms > target_ms:
+                    self._processing_overrun_count += 1
             sleep_ms = max(0.0, target_ms - spent_ms)
             if sleep_ms > 0:
                 time.sleep(sleep_ms / 1000.0)
 
+    def performance_summary(self):
+        """Return bounded, privacy-safe timing counters for the session manifest."""
+        with self._lock:
+            samples = list(self._processing_durations_ms)
+            sample_count = self._processing_sample_count
+            total_ms = self._processing_total_ms
+            max_ms = self._processing_max_ms
+            overruns = self._processing_overrun_count
+            frame_count = self.frame_count
+            point_count = len(self.saved_data)
+            history_capacity = self.time_data.maxlen
+            width = self._frame_width
+            height = self._frame_height
+        if samples:
+            ordered = sorted(samples)
+            p95_index = max(0, min(len(ordered) - 1, int(np.ceil(0.95 * len(ordered))) - 1))
+            p95_ms = round(float(ordered[p95_index]), 4)
+        else:
+            p95_ms = None
+        return {
+            "processed_frames": int(frame_count),
+            "analysis_points": int(point_count),
+            "timing_sample_count": int(sample_count),
+            "timing_window_samples": len(samples),
+            "analysis_interval_ms": int(self.processing_interval_ms),
+            "processing_mean_ms": round(float(total_ms / sample_count), 4) if sample_count else None,
+            "processing_p95_ms": p95_ms,
+            "processing_max_ms": round(float(max_ms), 4) if sample_count else None,
+            "interval_overrun_count": int(overruns),
+            "graph_history_capacity": int(history_capacity) if history_capacity is not None else None,
+            "frame_width": int(width) if width is not None else None,
+            "frame_height": int(height) if height is not None else None,
+        }
+
     def snapshot(self, copy_frame=True):
         with self._lock:
             frame = self.latest_frame.copy() if (copy_frame and self.latest_frame is not None) else None
+            graph_start = max(0, self._graph_len - self.max_points)
+            graph_end = self._graph_len
             return {
                 'frame': frame,
                 'means': self.current_means,
                 'roi_info': self.roi_info,
-                'graph_t': self._graph_t[:self._graph_len],
-                'graph_r': self._graph_r[:self._graph_len],
-                'graph_g': self._graph_g[:self._graph_len],
-                'graph_b': self._graph_b[:self._graph_len],
-                'graph_log': self._graph_log[:self._graph_len],
-                'graph_log_bg': self._graph_log_bg[:self._graph_len],
-                'graph_rgb_sum': self._graph_rgb_sum[:self._graph_len],
-                'graph_rgb_sum_smooth': self._graph_rgb_sum_smooth[:self._graph_len],
-                'graph_rgb_sum_slope10': self._graph_rgb_sum_slope10[:self._graph_len],
-                'graph_rgb_sum_slope30': self._graph_rgb_sum_slope30[:self._graph_len],
-                'graph_rgb_vector_speed30': self._graph_rgb_vector_speed30[:self._graph_len],
-                'graph_chromaticity_speed30': self._graph_chromaticity_speed30[:self._graph_len],
-                'graph_k_chrom_previous': self._graph_k_chrom_previous[:self._graph_len],
-                'graph_log_ratio_speed30': self._graph_log_ratio_speed30[:self._graph_len],
-                'graph_rgb_sum_acceleration30': self._graph_rgb_sum_acceleration30[:self._graph_len],
-                'graph_transition_score': self._graph_transition_score[:self._graph_len],
+                'graph_t': self._graph_t[graph_start:graph_end],
+                'graph_r': self._graph_r[graph_start:graph_end],
+                'graph_g': self._graph_g[graph_start:graph_end],
+                'graph_b': self._graph_b[graph_start:graph_end],
+                'graph_log': self._graph_log[graph_start:graph_end],
+                'graph_log_bg': self._graph_log_bg[graph_start:graph_end],
+                'graph_rgb_sum': self._graph_rgb_sum[graph_start:graph_end],
+                'graph_rgb_sum_smooth': self._graph_rgb_sum_smooth[graph_start:graph_end],
+                'graph_rgb_sum_slope10': self._graph_rgb_sum_slope10[graph_start:graph_end],
+                'graph_rgb_sum_slope30': self._graph_rgb_sum_slope30[graph_start:graph_end],
+                'graph_rgb_vector_speed30': self._graph_rgb_vector_speed30[graph_start:graph_end],
+                'graph_chromaticity_speed30': self._graph_chromaticity_speed30[graph_start:graph_end],
+                'graph_k_chrom_previous': self._graph_k_chrom_previous[graph_start:graph_end],
+                'graph_log_ratio_speed30': self._graph_log_ratio_speed30[graph_start:graph_end],
+                'graph_rgb_sum_acceleration30': self._graph_rgb_sum_acceleration30[graph_start:graph_end],
+                'graph_transition_score': self._graph_transition_score[graph_start:graph_end],
                 'graph_rate_b': np.empty(0, dtype=np.float64),
                 'graph_rate_r': np.empty(0, dtype=np.float64),
                 'graph_rate_g': np.empty(0, dtype=np.float64),
@@ -744,10 +855,10 @@ class CameraWorker:
                 'graph_rate_log_bg': np.empty(0, dtype=np.float64),
                 'graph_fastslow_log': np.empty(0, dtype=np.float64),
                 'graph_fastslow_log_bg': np.empty(0, dtype=np.float64),
-                'graph_tri_x': self._graph_tri_x[:self._graph_len],
-                'graph_tri_y': self._graph_tri_y[:self._graph_len],
+                'graph_tri_x': self._graph_tri_x[graph_start:graph_end],
+                'graph_tri_y': self._graph_tri_y[graph_start:graph_end],
                 'graph_version': self.graph_version,
-                'point_count': self._graph_len,
+                'point_count': len(self.saved_data),
                 'frame_count': self.frame_count,
                 'saved_data': self.saved_data,
                 'raw_csv_path': self.raw_csv_path,

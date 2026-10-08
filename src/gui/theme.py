@@ -1,0 +1,58 @@
+"""Color tokens for ELUTEC's graphite-and-signal interface."""
+
+
+def get_palette(light=True):
+    """Return shared semantic colors for ttk, Tk, Qt, and custom canvases."""
+    if light:
+        return {
+            "background": "#ECEFED",
+            "surface": "#F6F8F4",
+            "surface_alt": "#E8EDE7",
+            "surface_hover": "#DDE5DC",
+            "text": "#1B2521",
+            "muted": "#68766F",
+            "border": "#D1D9D2",
+            "accent": "#627B22",
+            "accent_hover": "#506719",
+            "accent_soft": "#E6EDD5",
+            "accent_on": "#FFFFFF",
+            "success": "#668536",
+            "success_soft": "#E5ECD8",
+            "warning": "#A96821",
+            "warning_soft": "#F2E8D8",
+            "danger": "#B45550",
+            "danger_hover": "#9E4844",
+            "danger_soft": "#F3E2E0",
+            "danger_on": "#FFFFFF",
+            "channel_r": "#C85F5A",
+            "channel_g": "#668E43",
+            "channel_b": "#5B7EA9",
+            "chart_grid": "#D7DFD8",
+            "video_background": "#DDE3DF",
+        }
+    return {
+        "background": "#090D11",
+        "surface": "#0E1419",
+        "surface_alt": "#131C23",
+        "surface_hover": "#18232B",
+        "text": "#EDF3F2",
+        "muted": "#82929B",
+        "border": "#24323A",
+        "accent": "#D8F26A",
+        "accent_hover": "#E4FB83",
+        "accent_soft": "#222C1B",
+        "accent_on": "#101609",
+        "success": "#B9DC6D",
+        "success_soft": "#28331C",
+        "warning": "#EFB567",
+        "warning_soft": "#382C1F",
+        "danger": "#FF7774",
+        "danger_hover": "#FF9290",
+        "danger_soft": "#392322",
+        "danger_on": "#24110F",
+        "channel_r": "#FF7774",
+        "channel_g": "#C6E777",
+        "channel_b": "#7EAAFF",
+        "chart_grid": "#202D33",
+        "video_background": "#080D11",
+    }
