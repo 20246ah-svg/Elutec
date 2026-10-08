@@ -42,11 +42,31 @@ def _marker_table_widths(has_log: bool = True) -> List[int]:
     return widths
 
 
+def _nearest_saved_data_index(saved_data, time_ms):
+    """Find the nearest row in an ordered session without allocating an O(N) array."""
+    if not saved_data:
+        return None
+    try:
+        target = float(time_ms)
+        low, high = 0, len(saved_data)
+        while low < high:
+            middle = (low + high) // 2
+            if float(saved_data[middle][0]) < target:
+                low = middle + 1
+            else:
+                high = middle
+        candidates = [idx for idx in (low - 1, low) if 0 <= idx < len(saved_data)]
+        # np.argmin used to prefer the first row on equal distances.
+        return min(candidates, key=lambda idx: (abs(float(saved_data[idx][0]) - target), idx))
+    except (TypeError, ValueError, IndexError, OverflowError):
+        times = np.asarray([float(row[0]) for row in saved_data], dtype=np.float64)
+        return int(np.argmin(np.abs(times - float(time_ms))))
+
+
 def _annotation_values_at_time(saved_data: List, time_ms: float, has_log: bool) -> Dict:
     if not saved_data:
         return {'r': None, 'g': None, 'b': None, 'log_br': None, 'log_bg': None}
-    times = np.array([float(row[0]) for row in saved_data], dtype=np.float64)
-    idx = int(np.argmin(np.abs(times - float(time_ms))))
+    idx = _nearest_saved_data_index(saved_data, time_ms)
     row = saved_data[idx]
     values = {
         'r': _py_scalar(row[1]),
@@ -245,10 +265,9 @@ def _write_markers_block(ws, annotations, saved_data=None, has_log=True, start_c
 def _annotation_row_map(saved_data, annotations):
     if not saved_data or not annotations:
         return {}
-    times = np.array([float(row[0]) for row in saved_data], dtype=np.float64)
     row_to_anns = {}
     for ann in annotations:
-        idx = int(np.argmin(np.abs(times - float(ann.time_ms))))
+        idx = _nearest_saved_data_index(saved_data, ann.time_ms)
         row_to_anns.setdefault(idx, []).append(ann)
     return row_to_anns
 
@@ -394,9 +413,20 @@ def _write_graph_data_sheet(ws, saved_data, custom_graphs=None, custom_variables
     # Base arrays used by the custom formula engine. Custom formulas are evaluated
     # during export so they are persisted in Excel exactly like built-in series.
     if saved_data:
-        arr = np.asarray(saved_data, dtype=object)
+        # One compact numeric block replaces both an unused object matrix and
+        # many separately-built column arrays. This lowers peak export memory
+        # for long sessions while keeping column views usable by custom formulas.
+        try:
+            numeric_data = np.asarray(saved_data, dtype=np.float64)
+            if numeric_data.ndim != 2:
+                numeric_data = None
+        except (TypeError, ValueError, OverflowError):
+            numeric_data = None
+
         def col(i):
             try:
+                if numeric_data is not None and numeric_data.shape[1] > i:
+                    return numeric_data[:, i]
                 return np.asarray([float(row[i]) if row[i] is not None else np.nan for row in saved_data], dtype=np.float64)
             except Exception:
                 return np.full(len(saved_data), np.nan, dtype=np.float64)
