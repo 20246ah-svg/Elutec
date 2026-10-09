@@ -1,0 +1,58 @@
+"""Shared ELUTEC workspace palettes, tuned to the Overview reference."""
+
+
+def get_palette(light=True):
+    """Semantic colors shared by the Tk shell, project dashboard, and Qt graphs."""
+    if light:
+        return {
+            "background": "#F7F8FA",
+            "surface": "#FFFFFF",
+            "surface_alt": "#F1F3F6",
+            "surface_hover": "#E8ECF3",
+            "text": "#182235",
+            "muted": "#788397",
+            "border": "#E1E6EE",
+            "accent": "#5B7CE5",
+            "accent_hover": "#496BDD",
+            "accent_soft": "#E9EEFF",
+            "accent_on": "#FFFFFF",
+            "success": "#36A99A",
+            "success_soft": "#E3F5F1",
+            "warning": "#B77A32",
+            "warning_soft": "#FFF3E0",
+            "danger": "#C65F6B",
+            "danger_hover": "#AD4E5B",
+            "danger_soft": "#FBEAEC",
+            "danger_on": "#FFFFFF",
+            "channel_r": "#D16C72",
+            "channel_g": "#47A78D",
+            "channel_b": "#557FE0",
+            "chart_grid": "#E7EBF1",
+            "video_background": "#E7EBF1",
+        }
+    return {
+        "background": "#111827",
+        "surface": "#171F2D",
+        "surface_alt": "#202A3A",
+        "surface_hover": "#29364A",
+        "text": "#F3F6FB",
+        "muted": "#9AA7BB",
+        "border": "#2B3749",
+        "accent": "#6D8AF0",
+        "accent_hover": "#829BFF",
+        "accent_soft": "#263455",
+        "accent_on": "#FFFFFF",
+        "success": "#51BCAE",
+        "success_soft": "#1F3A3A",
+        "warning": "#EDB665",
+        "warning_soft": "#3B3022",
+        "danger": "#F27C83",
+        "danger_hover": "#FF969C",
+        "danger_soft": "#3A252E",
+        "danger_on": "#211217",
+        "channel_r": "#F17A83",
+        "channel_g": "#6DD0AC",
+        "channel_b": "#809DFF",
+        "chart_grid": "#2A3547",
+        "video_background": "#0D1420",
+    }

@@ -792,12 +792,12 @@ class Tests(unittest.TestCase):
             o.cursor_hud_label = MockWidget()
             o.win = MockWidget()
             o._apply_elutek_qss()
-            self.assertIn('#F1F5F9', o.cursor_hud.styleSheet())
-            self.assertIn('#CBD5E1', o.cursor_hud.styleSheet())
+            self.assertIn('#F1F3F6', o.cursor_hud.styleSheet())
+            self.assertIn('#E1E6EE', o.cursor_hud.styleSheet())
             o.theme_mode = 'dark'
             o._apply_elutek_qss()
-            self.assertIn('rgba(17, 24, 39, 0.85)', o.cursor_hud.styleSheet())
-            self.assertIn('#2A3451', o.cursor_hud.styleSheet())
+            self.assertIn('#202A3A', o.cursor_hud.styleSheet())
+            self.assertIn('#2B3749', o.cursor_hud.styleSheet())
             return
 
         o = Probe.__new__(Probe)
@@ -814,14 +814,14 @@ class Tests(unittest.TestCase):
         o.notification_settings = {}
         o._apply_elutek_qss()
         hud_qss = o.cursor_hud.styleSheet()
-        self.assertIn('#F1F5F9', hud_qss)
-        self.assertIn('#CBD5E1', hud_qss)
+        self.assertIn('#F1F3F6', hud_qss)
+        self.assertIn('#E1E6EE', hud_qss)
 
         o.theme_mode = 'dark'
         o._apply_elutek_qss()
         dark_hud_qss = o.cursor_hud.styleSheet()
-        self.assertIn('rgba(17, 24, 39, 0.85)', dark_hud_qss)
-        self.assertIn('#2A3451', dark_hud_qss)
+        self.assertIn('#202A3A', dark_hud_qss)
+        self.assertIn('#2B3749', dark_hud_qss)
 
     def test_dialog_window_flags(self):
         try:
