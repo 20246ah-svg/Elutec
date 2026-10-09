@@ -746,7 +746,7 @@ class SetupApp:
         content = ttk.Frame(right, style='App.TFrame')
         content.pack(fill='both', expand=True)
 
-        frame_prev = ttk.Frame(content, style='Card.TFrame', padding=10, width=720, height=580)
+        frame_prev = ttk.Frame(content, style='Card.TFrame', padding=10)
         frame_prev.pack(side='left', fill='both', expand=True)
         frame_prev.pack_propagate(False)
         preview_header = ttk.Frame(frame_prev, style='Card.TFrame')
