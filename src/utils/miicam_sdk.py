@@ -2077,7 +2077,7 @@ class Miicam:
         self.__lib.Miicam_get_Binning(self.__h, ctypes.byref(pValue), ctypes.byref(pMethod))
         return (pValue.value.decode('ascii'), pMethod.value.decode('ascii'))
 
-    def get_BinningValue(self):
+    def get_all_BinningValue(self):
         num = self.get_BinningNumber()
         if num <= 0:
             return []

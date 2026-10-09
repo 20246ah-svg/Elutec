@@ -30,6 +30,7 @@ from ..utils.license_manager import (
 from ..config import DEFAULT_PERFORMANCE_PROFILE, PERFORMANCE_PROFILES
 from ..utils.hardware_advisor import collect_system_profile
 from .theme import get_palette
+from .preview_geometry import display_to_image_coordinates, format_preview_fps
 from .license_dialog import LicenseDialog
 from .project_window import ProjectManagerDialog
 from ..data.project_store import ProjectStore
@@ -58,11 +59,7 @@ def _get_unicode_font(size=14, bold=False):
 
 
 class PreviewWorker:
-    """
-    Высокопроизводительный фоновый захват кадров предпросмотра SetupApp.
-    Полностью избавляет главный GUI-поток Tkinter от блокировок I/O,
-    обеспечивая сверхвысокие частоты кадров (60–120+ FPS) с измерением реального FPS.
-    """
+    """Читает кадры в отдельном потоке, не блокируя интерфейс Tkinter."""
     def __init__(self, cap, is_file=False, initial_frame=None):
         self.cap = cap
         self.is_file = is_file
@@ -95,7 +92,6 @@ class PreviewWorker:
                             self.current_fps = round(self._fps_count / dt, 1)
                             self._fps_count = 0
                             self._fps_time = now
-                    # High-throughput non-blocking sleep (up to 120+ FPS with 0% CPU overhead)
                     time.sleep(0.001)
                 elif self.is_file:
                     try:
@@ -233,7 +229,10 @@ class SetupApp:
         self.is_running = True
         self.camera_list = []
         self.ip_camera_list = []
-        self.preview_scale = 1.0
+        self.preview_scale_x = 1.0
+        self.preview_scale_y = 1.0
+        self.preview_offset_x = 0.0
+        self.preview_offset_y = 0.0
         self.preview_width = 640
         self.preview_height = 480
         self.roi_shape = str(self.config.get('roi_shape', 'circle'))
@@ -251,8 +250,6 @@ class SetupApp:
         self.preview_rgb_interval_ms = int(self.config.get('preview_rgb_interval_ms', 200))
         self.preview_last_rgb_update = 0.0
         self.preview_current_rgb = None
-        self.preview_rgb_var = tk.StringVar(value="RGB ROI: —")
-        self.preview_log_var = tk.StringVar(value="Log10(B/R): —")
         self.preview_r_var = tk.StringVar(value="—")
         self.preview_g_var = tk.StringVar(value="—")
         self.preview_b_var = tk.StringVar(value="—")
@@ -478,8 +475,6 @@ class SetupApp:
                 self.camera_status_badge.configure(
                     style='OnlineBadge.TLabel' if connected else 'WaitingBadge.TLabel'
                 )
-            if hasattr(self, 'preview_spec_label'):
-                self.preview_spec_label.config(text='RGB  ·  SIGNAL ACTIVE' if connected else 'RGB  ·  LIVE INPUT')
         except Exception:
             pass
 
@@ -570,16 +565,7 @@ class SetupApp:
         # Compact topbar: workspace context and global actions.
         header = ttk.Frame(workspace, style='Topbar.TFrame', padding=(18, 10, 18, 10))
         header.pack(fill='x')
-        brand_copy = ttk.Frame(header, style='Topbar.TFrame')
-        brand_copy.pack(side='left', padx=(0, 18))
-        ttk.Label(brand_copy, text='ELUTEC  /  LAB SYSTEMS', style='Eyebrow.TLabel').pack(anchor='w')
-        ttk.Label(brand_copy, text='SARA RGB', style='Title.TLabel').pack(anchor='w', pady=(1, 0))
-        ttk.Separator(header, orient='vertical').pack(side='left', fill='y', padx=(0, 16), pady=3)
-        header_context = ttk.Frame(header, style='Topbar.TFrame')
-        header_context.pack(side='left', fill='x', expand=True)
-        ttk.Label(header_context, text='РАБОЧАЯ КОНСОЛЬ', style='Eyebrow.TLabel').pack(anchor='w')
-        ttk.Label(header_context, text='Визуальный контроль фракционирования',
-                  style='Subtitle.TLabel').pack(anchor='w', pady=(2, 0))
+        ttk.Label(header, text='ELUTEC · SARA RGB', style='Title.TLabel').pack(side='left', fill='y')
 
         self.project_btn = ttk.Button(
             header, text='Выбрать проект', command=self.open_project_manager, style='Quiet.TButton'
@@ -595,10 +581,7 @@ class SetupApp:
         body.pack(fill='both', expand=True)
         page_head = ttk.Frame(body, style='App.TFrame')
         page_head.pack(fill='x', pady=(0, 10))
-        page_title = ttk.Frame(page_head, style='App.TFrame')
-        page_title.pack(side='left', fill='x', expand=True)
-        ttk.Label(page_title, text='SESSION / 01', style='PageEyebrow.TLabel').pack(anchor='w')
-        ttk.Label(page_title, text='Мониторинг', style='SectionTitle.TLabel').pack(anchor='w', pady=(1, 0))
+        ttk.Label(page_head, text='Мониторинг', style='SectionTitle.TLabel').pack(side='left')
         self.camera_status_badge = ttk.Label(
             page_head, textvariable=self.camera_status_var, style='WaitingBadge.TLabel'
         )
@@ -616,8 +599,8 @@ class SetupApp:
         self.left_canvas = tk.Canvas(scroll_area, highlightthickness=0, bd=0, bg=colors['surface'])
         left_scrollbar = ttk.Scrollbar(scroll_area, orient='vertical', command=self.left_canvas.yview)
         self.left_canvas.configure(yscrollcommand=left_scrollbar.set)
-        self.left_canvas.pack(side='left', fill='both', expand=True)
         left_scrollbar.pack(side='right', fill='y')
+        self.left_canvas.pack(side='left', fill='both', expand=True)
         left = ttk.Frame(self.left_canvas, style='Control.TFrame')
         left_window_id = self.left_canvas.create_window((0, 0), window=left, anchor='nw')
 
@@ -652,20 +635,13 @@ class SetupApp:
         left_canvas.bind('<Enter>', _bind_scroll)
         left_canvas.bind('<Leave>', _unbind_scroll)
 
-        def make_section(parent, number, eyebrow, title):
+        def make_section(parent, title):
             section = ttk.Frame(parent, style='Card.TFrame', padding=(13, 11, 13, 12))
             section.pack(fill='x')
-            heading = ttk.Frame(section, style='Card.TFrame')
-            heading.pack(fill='x', pady=(0, 10))
-            ttk.Label(heading, text=number, style='Eyebrow.TLabel', width=3).pack(side='left', anchor='n')
-            copy = ttk.Frame(heading, style='Card.TFrame')
-            copy.pack(side='left', fill='x', expand=True)
-            ttk.Label(copy, text=eyebrow, style='Eyebrow.TLabel').pack(anchor='w')
-            ttk.Label(copy, text=title, style='CardTitle.TLabel').pack(anchor='w', pady=(2, 0))
+            ttk.Label(section, text=title, style='CardTitle.TLabel').pack(anchor='w', pady=(0, 10))
             return section
 
-        # 01 — device discovery, source selection, and file input.
-        frame_scan = make_section(left, '01', 'ВВОД', 'Источник сигнала')
+        frame_scan = make_section(left, 'Источник сигнала')
         scan_actions = ttk.Frame(frame_scan, style='Card.TFrame')
         scan_actions.pack(fill='x', pady=(0, 7))
         scan_actions.columnconfigure(0, weight=1)
@@ -689,7 +665,7 @@ class SetupApp:
         self.devices_label = ttk.Label(frame_scan, text='Выбранное устройство: —',
                                        wraplength=265, style='CardMuted.TLabel')
         self.devices_label.pack(fill='x', pady=(0, 7))
-        ttk.Label(frame_scan, text='ИНДЕКС / URL / RTSP', style='Eyebrow.TLabel').pack(anchor='w', pady=(1, 4))
+        ttk.Label(frame_scan, text='Индекс, URL или RTSP', style='CardMuted.TLabel').pack(anchor='w', pady=(1, 4))
         self.entry_source = ttk.Entry(frame_scan)
         self.entry_source.insert(0, str(self.config.get('source', '0')))
         self.entry_source.pack(fill='x', pady=(0, 6))
@@ -705,8 +681,7 @@ class SetupApp:
                    style='Quiet.TButton').pack(fill='x', pady=(7, 0))
         ttk.Separator(left, orient='horizontal').pack(fill='x', padx=12)
 
-        # 02 — compact two-column ROI fields, with the same drag-on-preview flow.
-        frame_roi = make_section(left, '02', 'ИЗМЕРЕНИЕ', 'Область анализа')
+        frame_roi = make_section(left, 'Область анализа')
         self.var_x = tk.IntVar(value=int(self.config.get('roi_x', 300)))
         self.var_y = tk.IntVar(value=int(self.config.get('roi_y', 150)))
         self.var_w = tk.IntVar(value=int(self.config.get('roi_w', 200)))
@@ -753,15 +728,12 @@ class SetupApp:
         self.update_coord_label()
         ttk.Separator(left, orient='horizontal').pack(fill='x', padx=12)
 
-        # 03 — output destination; no duplicate explanation text.
-        frame_save = make_section(left, '03', 'РЕЗУЛЬТАТЫ', 'Папка проекта')
+        frame_save = make_section(left, 'Проект')
         self.session_path_var = tk.StringVar(master=self.root, value='Проект не выбран')
         self.entry_save_folder = ttk.Entry(frame_save, textvariable=self.session_path_var, state='readonly')
         self.entry_save_folder.pack(fill='x', pady=(0, 6))
         ttk.Button(frame_save, text='Выбрать / создать проект…', command=self.open_project_manager,
                    style='Quiet.TButton').pack(fill='x')
-        ttk.Label(frame_save, text='Для каждого анализа создаётся отдельная сессия.',
-                  style='CardMuted.TLabel', wraplength=255).pack(anchor='w', pady=(7, 0))
 
         action_bar = ttk.Frame(left_outer, style='Control.TFrame', padding=(12, 10, 12, 11))
         action_bar.pack(fill='x')
@@ -774,16 +746,12 @@ class SetupApp:
         content = ttk.Frame(right, style='App.TFrame')
         content.pack(fill='both', expand=True)
 
-        frame_prev = ttk.Frame(content, style='Card.TFrame', padding=10)
+        frame_prev = ttk.Frame(content, style='Card.TFrame', padding=10, width=720, height=580)
         frame_prev.pack(side='left', fill='both', expand=True)
+        frame_prev.pack_propagate(False)
         preview_header = ttk.Frame(frame_prev, style='Card.TFrame')
         preview_header.pack(fill='x', pady=(0, 8))
-        preview_copy = ttk.Frame(preview_header, style='Card.TFrame')
-        preview_copy.pack(side='left', fill='x', expand=True)
-        ttk.Label(preview_copy, text='A  /  CAPTURE', style='Eyebrow.TLabel').pack(anchor='w')
-        ttk.Label(preview_copy, text='Видеопоток', style='CardTitle.TLabel').pack(anchor='w', pady=(2, 0))
-        self.preview_spec_label = ttk.Label(preview_header, text='RGB  ·  LIVE INPUT', style='CardMuted.TLabel')
-        self.preview_spec_label.pack(side='right', padx=(6, 0))
+        ttk.Label(preview_header, text='Видеопоток', style='CardTitle.TLabel').pack(side='left')
         self.preview_label = ttk.Label(frame_prev, style='Preview.TLabel', anchor='center')
         self.preview_label.pack(fill='both', expand=True)
         self.preview_label.bind('<ButtonPress-1>', self.on_preview_mouse_down)
@@ -795,8 +763,7 @@ class SetupApp:
         frame_chart.pack(fill='x', pady=(10, 0))
         chart_header = ttk.Frame(frame_chart, style='Card.TFrame')
         chart_header.pack(fill='x', pady=(0, 6))
-        ttk.Label(chart_header, text='B  /  LIVE DATA', style='Eyebrow.TLabel').pack(side='left')
-        ttk.Label(chart_header, text='История сигнала', style='CardTitle.TLabel').pack(side='left', padx=(8, 0))
+        ttk.Label(chart_header, text='История сигнала', style='CardTitle.TLabel').pack(side='left')
         legend = ttk.Frame(chart_header, style='Card.TFrame')
         legend.pack(side='right')
         for code, label_style in (('● R', 'R.TLabel'), ('● G', 'G.TLabel'), ('● B', 'B.TLabel')):
@@ -808,8 +775,7 @@ class SetupApp:
         aside = ttk.Frame(content, width=256, style='Card.TFrame', padding=(13, 12))
         aside.pack(side='right', fill='y', padx=(11, 0))
         aside.pack_propagate(False)
-        ttk.Label(aside, text='ROI / READOUT', style='Eyebrow.TLabel').pack(anchor='w')
-        ttk.Label(aside, text='Показатели', style='CardTitle.TLabel').pack(anchor='w', pady=(3, 10))
+        ttk.Label(aside, text='Показатели', style='CardTitle.TLabel').pack(anchor='w', pady=(0, 10))
         metric_rows = (
             ('R', self.preview_r_var, 'R.TLabel'),
             ('G', self.preview_g_var, 'G.TLabel'),
@@ -821,7 +787,6 @@ class SetupApp:
             ttk.Separator(row, orient='horizontal').pack(side='top', fill='x', pady=(0, 7))
             ttk.Label(row, text=code, style=value_style, width=3).pack(side='left')
             ttk.Label(row, textvariable=value_var, style='MetricValue.TLabel').pack(side='left')
-            ttk.Label(row, text='MEAN', style='Eyebrow.TLabel').pack(side='right', anchor='s', pady=(0, 3))
         ttk.Separator(aside, orient='horizontal').pack(fill='x', pady=(6, 10))
         ttk.Label(aside, text='LOG10 (B / R)', style='Eyebrow.TLabel').pack(anchor='w')
         ttk.Label(aside, textvariable=self.preview_log_value_var,
@@ -831,12 +796,6 @@ class SetupApp:
         self.preview_color_canvas = tk.Canvas(color_row, width=48, height=28, highlightthickness=1)
         self.preview_color_canvas.pack(side='left', padx=(0, 8))
         ttk.Label(color_row, text='Средний цвет ROI', style='CardMuted.TLabel', wraplength=135).pack(side='left', anchor='center')
-        ttk.Separator(aside, orient='horizontal').pack(fill='x', pady=(0, 10))
-        ttk.Label(aside, text='ROI / GEOMETRY', style='Eyebrow.TLabel').pack(anchor='w')
-        ttk.Label(aside, text='Активная область', style='CardTitle.TLabel').pack(anchor='w', pady=(3, 5))
-        ttk.Label(aside, textvariable=self.preview_rgb_var, style='CardMuted.TLabel').pack(anchor='w')
-        ttk.Label(aside, text='Перемещайте контур на изображении или редактируйте координаты слева.',
-                  style='CardMuted.TLabel', wraplength=215, justify='left').pack(anchor='w', pady=(8, 0))
 
         try:
             self._apply_start_theme()
@@ -962,10 +921,10 @@ class SetupApp:
         if store and store.manifest:
             name = str(store.manifest.get("name") or store.root.name)
             short_name = name if len(name) <= 22 else name[:19] + "…"
-            button_text = f"⌂  {short_name}  ▾"
+            button_text = f"{short_name}  ▾"
             target = str(session_path or (store.root / "sessions"))
         else:
-            button_text = "⌂  Main Workspace  ▾"
+            button_text = "Выбрать проект"
             target = "Проект не выбран"
         if hasattr(self, "project_btn"):
             try:
@@ -1589,11 +1548,25 @@ class SetupApp:
         self.on_device_select(event)
 
                                                                    
+    def _preview_pointer_coordinates(self, event, clamp=False):
+        return display_to_image_coordinates(
+            event.x,
+            event.y,
+            self.preview_scale_x,
+            self.preview_scale_y,
+            self.preview_offset_x,
+            self.preview_offset_y,
+            self.preview_width,
+            self.preview_height,
+            clamp=clamp,
+        )
+
     def on_preview_mouse_hover(self, event):
-        if self.preview_scale <= 0:
+        coordinates = self._preview_pointer_coordinates(event)
+        if coordinates is None:
+            self.preview_label.config(cursor='arrow')
             return
-        x = int(event.x / self.preview_scale)
-        y = int(event.y / self.preview_scale)
+        x, y = coordinates
         x0 = self.safe_get_int(self.var_x, 0)
         y0 = self.safe_get_int(self.var_y, 0)
         w = self.safe_get_int(self.var_w, self.MIN_ROI_SIZE)
@@ -1633,10 +1606,10 @@ class SetupApp:
                 self.preview_label.config(cursor="arrow")
 
     def on_preview_mouse_down(self, event):
-        if self.preview_scale <= 0:
+        coordinates = self._preview_pointer_coordinates(event)
+        if coordinates is None:
             return
-        x = int(event.x / self.preview_scale)
-        y = int(event.y / self.preview_scale)
+        x, y = coordinates
         x0 = self.safe_get_int(self.var_x, 0)
         y0 = self.safe_get_int(self.var_y, 0)
         w = self.safe_get_int(self.var_w, self.MIN_ROI_SIZE)
@@ -1671,8 +1644,10 @@ class SetupApp:
     def on_preview_mouse_move(self, event):
         if not self.roi_drag:
             return
-        x = int(event.x / self.preview_scale)
-        y = int(event.y / self.preview_scale)
+        coordinates = self._preview_pointer_coordinates(event, clamp=True)
+        if coordinates is None:
+            return
+        x, y = coordinates
         x0, y0, w, h = self.roi_orig
         x1 = x0 + w
         y1 = y0 + h
@@ -1763,15 +1738,12 @@ class SetupApp:
         log_br = compute_log_br(mean_b, mean_r)
         self.preview_current_rgb = (float(mean_r), float(mean_g), float(mean_b), float(log_br))
         self.preview_rgb_history.append((float(mean_r), float(mean_g), float(mean_b), float(log_br)))
-        self.preview_rgb_var.set(f"R:{mean_r:6.1f}  G:{mean_g:6.1f}  B:{mean_b:6.1f}")
         self.preview_r_var.set(f"{mean_r:0.1f}")
         self.preview_g_var.set(f"{mean_g:0.1f}")
         self.preview_b_var.set(f"{mean_b:0.1f}")
         if np.isfinite(log_br):
-            self.preview_log_var.set(f"Log10(B/R): {log_br: .4f}")
             self.preview_log_value_var.set(f"{log_br:+.4f}")
         else:
-            self.preview_log_var.set("Log10(B/R): —")
             self.preview_log_value_var.set("—")
         try:
             canvas = self.preview_color_canvas
@@ -1871,14 +1843,18 @@ class SetupApp:
                 scale_w = preview_width / width if width > 0 else 1.0
                 scale_h = preview_height / height if height > 0 else 1.0
                 scale = min(scale_w, scale_h)
-                self.preview_scale = scale
                 self.preview_width = width
                 self.preview_height = height
                 self.update_coord_label()
 
-                # Fast preview downscale first for 60+ FPS high-throughput rendering
                 new_width = max(10, int(width * scale))
                 new_height = max(10, int(height * scale))
+                scale_x = new_width / width
+                scale_y = new_height / height
+                self.preview_scale_x = scale_x
+                self.preview_scale_y = scale_y
+                self.preview_offset_x = max(0.0, (preview_width - new_width) / 2.0)
+                self.preview_offset_y = max(0.0, (preview_height - new_height) / 2.0)
                 preview_frame = cv2.resize(raw_frame, (new_width, new_height))
 
                 # Periodically compute accurate ROI RGB stats
@@ -1900,10 +1876,10 @@ class SetupApp:
                         pass
 
                 # Draw ROI directly in preview coordinate space (smooth, zero-overhead)
-                sx = int(x * scale)
-                sy = int(y * scale)
-                sw = max(6, int(w * scale))
-                sh = max(6, int(h * scale))
+                sx = int(x * scale_x)
+                sy = int(y * scale_y)
+                sw = max(6, int(w * scale_x))
+                sh = max(6, int(h * scale_y))
 
                 # A restrained teal ROI outline remains clear on both bright and dark footage.
                 roi_color = (142, 174, 108)  # BGR: muted teal-green
@@ -1931,13 +1907,21 @@ class SetupApp:
 
                 # Compact dark HUD keeps measurements legible without a pure-black block.
                 pr, pg, pb, plog = self.preview_current_rgb if self.preview_current_rgb is not None else (0.0, 0.0, 0.0, 0.0)
-                fps_val = getattr(self.preview_worker, 'current_fps', 0.0) if self.preview_worker else 0.0
-                if fps_val <= 0.0 and getattr(self, 'cap', None) is not None:
+                worker = getattr(self, 'preview_worker', None)
+                capture = getattr(self, 'cap', None)
+                if worker is not None and getattr(worker, 'is_file', False):
                     try:
-                        fps_val = self.cap.get(cv2.CAP_PROP_FPS)
+                        fps_value = capture.get(cv2.CAP_PROP_FPS) if capture is not None else None
                     except Exception:
-                        fps_val = 0.0
-                fps_str = f"FPS: {fps_val:.0f}" if fps_val > 0 else "FPS: 60"
+                        fps_value = None
+                else:
+                    fps_value = getattr(worker, 'current_fps', None)
+                    if format_preview_fps(fps_value) == 'FPS: —' and capture is not None:
+                        try:
+                            fps_value = capture.get(cv2.CAP_PROP_FPS)
+                        except Exception:
+                            pass
+                fps_str = format_preview_fps(fps_value)
                 overlay_lines = [
                     f"ROI RGB  R: {pr:4.1f}  G: {pg:4.1f}  B: {pb:4.1f} | {fps_str}",
                     f"Log10(B/R): {plog: .4f}",
@@ -1979,10 +1963,7 @@ class SetupApp:
                 ph = 520
 
             colors = getattr(self, '_ui_palette', get_palette(bool(self.config.get('light_theme', False))))
-            source = str(self.entry_source.get()).strip() if hasattr(self, 'entry_source') else ''
-            roi_width = self.safe_get_int(self.var_w, 200)
-            roi_height = self.safe_get_int(self.var_h, 200)
-            cache_key = (pw, ph, bool(self.config.get('light_theme', False)), source, roi_width, roi_height)
+            cache_key = (pw, ph, bool(self.config.get('light_theme', False)))
             cached_image = getattr(self, '_empty_preview_photo', None)
             if cache_key == getattr(self, '_empty_preview_key', None) and cached_image is not None:
                 self.preview_label.imgtk = cached_image
@@ -2025,10 +2006,8 @@ class SetupApp:
                 draw.line((x, y, x + arm * x_sign, y), fill=border, width=1)
                 draw.line((x, y, x, y + arm * y_sign), fill=border, width=1)
 
-            font_kicker = _get_unicode_font(9, bold=True)
             font_title = _get_unicode_font(20, bold=True)
             font_body = _get_unicode_font(11, bold=False)
-            font_mono = _get_unicode_font(9, bold=False)
 
             # Central optical reticle.
             ring = 31
@@ -2041,24 +2020,13 @@ class SetupApp:
             draw.line((cx, cy + 28, cx, cy + 51), fill=border, width=1)
             draw.ellipse((cx - 2, cy - 2, cx + 2, cy + 2), fill=text)
 
-            label = 'INPUT 01  /  SARA RGB CAPTURE'
-            box = draw.textbbox((0, 0), label, font=font_kicker)
-            draw.text((cx - (box[2] - box[0]) / 2, cy + 54), label, font=font_kicker, fill=accent)
             title = 'Источник не подключён'
             box = draw.textbbox((0, 0), title, font=font_title)
-            title_y = cy + 76
+            title_y = cy + 62
             draw.text((cx - (box[2] - box[0]) / 2, title_y), title, font=font_title, fill=text)
-            hint = 'Выберите камеру слева или укажите адрес видеопотока'
+            hint = 'Выберите камеру или откройте видеофайл'
             box = draw.textbbox((0, 0), hint, font=font_body)
-            draw.text((cx - (box[2] - box[0]) / 2, title_y + 31), hint, font=font_body, fill=muted)
-
-            source = str(self.entry_source.get()).strip() if hasattr(self, 'entry_source') else ''
-            source_text = f'SOURCE  {source or "—"}'
-            draw.text((inset + 3, inset + 4), source_text, font=font_mono, fill=muted)
-            draw.text((pw - inset - 95, inset + 4), 'STANDBY  ·  0 FPS', font=font_mono, fill=muted)
-            roi_text = f'ROI  {self.safe_get_int(self.var_w, 200)} × {self.safe_get_int(self.var_h, 200)} PX'
-            draw.text((inset + 3, ph - inset - 16), roi_text, font=font_mono, fill=accent)
-            draw.text((pw - inset - 112, ph - inset - 16), 'AWAITING SIGNAL', font=font_mono, fill=muted)
+            draw.text((cx - (box[2] - box[0]) / 2, title_y + 34), hint, font=font_body, fill=muted)
 
             imgtk = ImageTk.PhotoImage(image=img)
             self._empty_preview_key = cache_key
